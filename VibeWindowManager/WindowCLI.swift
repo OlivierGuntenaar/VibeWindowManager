@@ -11,6 +11,7 @@ import Foundation
 enum VibeAppPersistence {
     /// When true (default), the bridge starts at launch and the menu/GUI toggles default to on.
     static let bridgeServerEnabledKey = "vibeBridgeServerEnabled"
+
 }
 
 enum WindowCLICommand: Equatable {
@@ -124,7 +125,7 @@ enum WindowCLI {
                     throw WindowCLIParseError.missingPixelValue
                 }
                 let value = userArguments[index + 1]
-                guard let numeric = Double(value) else {
+                guard let numeric = Double(value), numeric.isFinite else {
                     throw WindowCLIParseError.invalidPixelValue(value)
                 }
                 pixel = CGFloat(numeric)
@@ -477,7 +478,7 @@ enum WindowCLI {
         var i = 0
         while i < userArguments.count {
             let a = userArguments[i]
-            if a.hasPrefix("-NS") {
+            if a.hasPrefix("-NS") || a == "-ApplePersistenceIgnoreState" {
                 if i + 1 < userArguments.count, !userArguments[i + 1].hasPrefix("-") {
                     i += 2
                 } else {

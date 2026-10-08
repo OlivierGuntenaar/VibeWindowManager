@@ -23,21 +23,32 @@ final class VibeWindowManagerUITests: XCTestCase {
     }
 
     @MainActor
-    func testExample() throws {
-        // UI tests must launch the application that they test.
-        let app = XCUIApplication()
+    func testMainWindowAndUpdateMenu() throws {
+        let app = makeVibeUITestApplication()
         app.launch()
-
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // XCUIAutomation Documentation
-        // https://developer.apple.com/documentation/xcuiautomation
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.menuBars.menuBarItems["Quick layout"].exists)
+        app.menuBars.menuBarItems["VibeWindowManager"].click()
+        let update = app.menuItems["Check for Updates…"]
+        XCTAssertTrue(update.waitForExistence(timeout: 3))
+        // Development builds must not replace themselves with a distributed build.
+        XCTAssertFalse(update.isEnabled)
+        app.typeKey(.escape, modifierFlags: [])
     }
 
     @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {
-            XCUIApplication().launch()
+            makeVibeUITestApplication().launch()
         }
     }
+}
+
+@MainActor
+func makeVibeUITestApplication() -> XCUIApplication {
+    let app = XCUIApplication()
+    app.launchEnvironment["VIBE_UI_TESTING"] = "1"
+    app.launchArguments = ["-ApplePersistenceIgnoreState", "YES"]
+    return app
 }

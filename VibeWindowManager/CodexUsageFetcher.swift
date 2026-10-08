@@ -21,6 +21,7 @@
 //
 
 import Foundation
+import CoreFoundation
 
 struct CodexUsageFetcher: UsageFetching {
     /// Hard cap on how long the live `codex app-server` round trip may take.
@@ -109,10 +110,12 @@ nonisolated enum CodexUsageEngine {
         if let byId = result["rateLimitsByLimitId"] as? [String: Any] {
             // Main ("codex") bucket first, then any extra metered buckets in a stable order.
             for key in byId.keys.sorted(by: { ($0 == "codex" ? 0 : 1, $0) < ($1 == "codex" ? 0 : 1, $1) }) {
-                guard let snap = byId[key] as? [String: Any] else { continue }
+                guard var snap = byId[key] as? [String: Any] else { continue }
                 let id = (snap["limitId"] as? String) ?? key
                 if seenIds.contains(id) { continue }
                 seenIds.insert(id)
+                // The map key identifies buckets even when limitId is omitted.
+                snap["limitId"] = id
                 snapshots.append(snap)
             }
         }
@@ -129,7 +132,7 @@ nonisolated enum CodexUsageEngine {
             let prefix: String? = index == 0 ? nil : ((snap["limitName"] as? String) ?? (snap["limitId"] as? String))
             for (slot, key) in ["primary", "secondary"].enumerated() {
                 guard let w = snap[key] as? [String: Any], let used = number(w["usedPercent"]) else { continue }
-                let minutes = number(w["windowDurationMins"]).map { Int($0) }
+                let minutes = durationMinutes(w["windowDurationMins"])
                 let resets = number(w["resetsAt"]).map { Date(timeIntervalSince1970: $0) }
                 var label = windowLabel(minutes: minutes, fallback: slot == 0 ? "Primary" : "Secondary")
                 if let prefix, !prefix.isEmpty { label = "\(prefix) · \(label)" }
@@ -154,7 +157,9 @@ nonisolated enum CodexUsageEngine {
             used = 0
             resetsAt = nil
         }
-        let sortKey = bucket * 1_000_000 + (minutes ?? (slot == 0 ? 999_000 : 999_001))
+        let (bucketOffset, bucketOverflow) = bucket.multipliedReportingOverflow(by: 1_000_000)
+        let (combined, durationOverflow) = bucketOffset.addingReportingOverflow(minutes ?? (slot == 0 ? 999_000 : 999_001))
+        let sortKey = bucketOverflow || durationOverflow ? Int.max : combined
         return .init(label: label, usedPercent: used, resetsAt: resetsAt, sortKey: sortKey)
     }
 
@@ -185,13 +190,25 @@ nonisolated enum CodexUsageEngine {
         return raw.split(separator: "_").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 
+    /// Reject untrusted values before converting to Int (which traps on overflow/NaN).
+    static func durationMinutes(_ value: Any?) -> Int? {
+        guard let value = number(value), value > 0 else { return nil }
+        return Int(exactly: value.rounded(.towardZero))
+    }
+
     static func number(_ value: Any?) -> Double? {
+        let parsed: Double?
         switch value {
-        case let n as NSNumber: return n.doubleValue
-        case let s as String: return Double(s)
+        case let n as NSNumber:
+            guard CFGetTypeID(n) != CFBooleanGetTypeID() else { return nil }
+            parsed = n.doubleValue
+        case let s as String: parsed = Double(s)
         default: return nil
         }
+        guard let parsed, parsed.isFinite else { return nil }
+        return parsed
     }
+
 }
 
 // MARK: - codex binary resolution
@@ -345,7 +362,7 @@ nonisolated enum CodexAppServerClient {
                 return .failure(reader.isAtEOF ? "codex app-server exited unexpectedly" : "codex app-server timed out")
             }
             guard let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
-                  let responseId = CodexUsageEngine.number(obj["id"]), Int(responseId) == id,
+                  let responseId = CodexUsageEngine.number(obj["id"]), responseId == Double(id),
                   obj["method"] == nil
             else { continue } // notifications / server requests / noise
             if let error = obj["error"] as? [String: Any] {
@@ -470,7 +487,7 @@ nonisolated enum CodexRolloutReader {
         return files.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
     }
 
-    private static func parseTail(of url: URL) -> CodexUsageResult? {
+    static func parseTail(of url: URL) -> CodexUsageResult? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         let maxBytes: UInt64 = 4 * 1024 * 1024
@@ -501,14 +518,14 @@ nonisolated enum CodexRolloutReader {
         return nil
     }
 
-    private static func parseSnakeCase(_ limits: [String: Any], snapshotDate: Date) -> CodexUsageResult? {
+    static func parseSnakeCase(_ limits: [String: Any], snapshotDate: Date) -> CodexUsageResult? {
         let now = Date()
         var windows: [CodexUsageResult.Window] = []
         var labels = Set<String>()
         for (slot, key) in ["primary", "secondary"].enumerated() {
             guard let w = limits[key] as? [String: Any],
                   let used = CodexUsageEngine.number(w["used_percent"]) else { continue }
-            let minutes = CodexUsageEngine.number(w["window_minutes"]).map { Int($0) }
+            let minutes = CodexUsageEngine.durationMinutes(w["window_minutes"])
             var resets: Date?
             if let at = CodexUsageEngine.number(w["resets_at"]) {
                 resets = Date(timeIntervalSince1970: at)

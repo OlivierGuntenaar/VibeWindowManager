@@ -29,6 +29,7 @@
 //
 
 import Foundation
+import CoreFoundation
 
 struct ClaudeUsageFetcher: UsageFetching {
     /// Results younger than this are served from memory. The usage endpoint
@@ -209,18 +210,20 @@ extension ClaudeUsageFetcher {
     }
 
     nonisolated static func number(_ value: Any?) -> Double? {
+        let parsed: Double?
         switch value {
-        case let n as NSNumber: return n.doubleValue
-        case let s as String: return Double(s)
-        default: return nil
+        case let n as NSNumber where CFGetTypeID(n) != CFBooleanGetTypeID(): parsed = n.doubleValue
+        case let s as String: parsed = Double(s)
+        default: parsed = nil
         }
+        guard let parsed, parsed.isFinite else { return nil }
+        return parsed
     }
 
     /// Accepts ISO-8601 with any number of fractional digits (the API sends
     /// microseconds, which ISO8601DateFormatter rejects), or epoch seconds/ms.
     nonisolated static func date(_ value: Any?) -> Date? {
-        if let n = value as? NSNumber {
-            let v = n.doubleValue
+        if value is NSNumber, let v = number(value) {
             return Date(timeIntervalSince1970: v > 1e12 ? v / 1000 : v)
         }
         guard let raw = value as? String, !raw.isEmpty else { return nil }

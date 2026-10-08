@@ -52,6 +52,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A01000000000000000000003 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +113,7 @@
 			);
 			name = VibeWindowManager;
 			packageProductDependencies = (
+				A01000000000000000000002 /* Sparkle */,
 			);
 			productName = VibeWindowManager;
 			productReference = 753F6A692F9A72C000413ED0 /* VibeWindowManager.app */;
@@ -203,6 +205,9 @@
 				753F6A682F9A72BF00413ED0 /* VibeWindowManager */,
 				753F6A772F9A72C200413ED0 /* VibeWindowManagerTests */,
 				753F6A812F9A72C200413ED0 /* VibeWindowManagerUITests */,
+			);
+			packageReferences = (
+				A01000000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 		};
 /* End PBXProject section */
@@ -581,6 +586,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A01000000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = { kind = exactVersion; version = 2.10.0; };
+		};
+
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A01000000000000000000002 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A01000000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin PBXBuildFile section */
+		A01000000000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A01000000000000000000002 /* Sparkle */; };
+/* End PBXBuildFile section */
 	};
 	rootObject = 753F6A612F9A72BF00413ED0 /* Project object */;
 }

@@ -10,7 +10,7 @@
 import Combine
 import Foundation
 
-enum UsageProvider: String { case claude, codex }
+enum UsageProvider: String { case claude, codex, cursor }
 
 /// One rate-limit window, e.g. "Session" (5h) or "Weekly".
 struct UsageWindow: Identifiable, Equatable {
@@ -45,13 +45,15 @@ final class UsageLimitsService: ObservableObject {
         [
             .claude: ClaudeUsageFetcher(),
             .codex: CodexUsageFetcher(),
+            .cursor: CursorUsageFetcher(),
         ]
     }
 
     @Published private(set) var claude: ProviderUsage?
     @Published private(set) var codex: ProviderUsage?
+    @Published private(set) var cursor: ProviderUsage?
     @Published private(set) var isRefreshing = false
-    /// When the last full refresh (both providers) finished.
+    /// When the last full refresh (all providers) finished.
     @Published private(set) var lastRefreshed: Date?
 
     private let fetchers: [UsageProvider: any UsageFetching]
@@ -65,6 +67,7 @@ final class UsageLimitsService: ObservableObject {
         switch provider {
         case .claude: return claude
         case .codex: return codex
+        case .cursor: return cursor
         }
     }
 
@@ -123,6 +126,7 @@ final class UsageLimitsService: ObservableObject {
         switch usage.provider {
         case .claude: claude = usage
         case .codex: codex = usage
+        case .cursor: cursor = usage
         }
     }
 }

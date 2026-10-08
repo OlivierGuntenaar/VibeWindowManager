@@ -45,3 +45,16 @@ To **read terminal text** on the phone/tablet (not just window outlines), run yo
 - **[VibeWindowManagerIOS](https://github.com/Tguntenaar/VibeWindowManagerIOS)** — Remote layout map, window selection, and connect UI for iPhone / iPad.
 
 If you have both projects cloned as siblings, paths like `../VibeWindowManagerIOS` match that layout.
+
+## Share a desktop test build
+
+Run `python3 scripts/build-release.py 1.0.2 5` to build a universal Mac DMG with
+Sparkle updates. No paid Apple developer account is needed for this unnotarized
+test build. See [shipping and updates](docs/SHIPPING.md) for installation, release
+publishing, and protecting the update signing key.
+
+The menu-bar usage panel includes Claude, Codex, and Cursor. Cursor reads its own
+local login from its SQLite settings database (read-only) and requests current
+Auto/API pool limits from Cursor's DashboardService. It never refreshes or logs
+Cursor tokens. This is Cursor's internal app API, so future API changes may require
+an update. Missing/expired logins and unavailable limits are shown explicitly.

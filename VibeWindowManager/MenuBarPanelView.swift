@@ -113,16 +113,22 @@ enum UsageFormat {
     static func resetText(_ resetsAt: Date?, now: Date) -> String? {
         guard let resetsAt else { return nil }
         let seconds = resetsAt.timeIntervalSince(now)
+        guard seconds.isFinite else { return nil }
         guard seconds > 0 else { return "reset" }
+        guard Int(exactly: (seconds / 60).rounded(.up)) != nil else { return nil }
         return "resets in \(compactDuration(seconds))"
     }
 
     /// `just now`, `1m ago`, `3h ago`, `2d ago`.
     static func updatedText(_ date: Date?, now: Date) -> String {
         guard let date else { return "not updated yet" }
-        let seconds = max(now.timeIntervalSince(date), 0)
+        let elapsed = now.timeIntervalSince(date)
+        guard elapsed.isFinite else { return "update time unavailable" }
+        let seconds = max(elapsed, 0)
         if seconds < 60 { return "updated just now" }
-        let minutes = Int(seconds / 60)
+        guard let minutes = Int(exactly: (seconds / 60).rounded(.towardZero)) else {
+            return "update time unavailable"
+        }
         if minutes < 60 { return "updated \(minutes)m ago" }
         let hours = minutes / 60
         if hours < 24 { return "updated \(hours)h ago" }
@@ -130,7 +136,10 @@ enum UsageFormat {
     }
 
     static func compactDuration(_ seconds: TimeInterval) -> String {
-        let totalMinutes = max(Int((seconds / 60).rounded(.up)), 1)
+        guard seconds.isFinite, let roundedMinutes = Int(exactly: (seconds / 60).rounded(.up)) else {
+            return "unknown"
+        }
+        let totalMinutes = max(roundedMinutes, 1)
         let days = totalMinutes / (24 * 60)
         let hours = (totalMinutes % (24 * 60)) / 60
         let minutes = totalMinutes % 60
@@ -148,6 +157,7 @@ enum UsageFormat {
 
     /// `42% used`, or `58% left` for providers that count down (Codex).
     static func percentText(_ used: Double, showsRemaining: Bool) -> String {
+        guard used.isFinite else { return "unavailable" }
         let clamped = min(max(used, 0), 100)
         return showsRemaining
             ? "\(Int((100 - clamped).rounded()))% left"
@@ -156,6 +166,7 @@ enum UsageFormat {
 
     /// Green under 60 %, amber under 85 %, red from 85 %.
     static func barColor(_ used: Double) -> Color {
+        guard used.isFinite else { return .gray }
         if used >= 85 { return .red }
         if used >= 60 { return .orange }
         return .green
@@ -167,6 +178,7 @@ extension UsageProvider {
         switch self {
         case .claude: return "Claude"
         case .codex: return "Codex"
+        case .cursor: return "Cursor"
         }
     }
 
@@ -174,6 +186,7 @@ extension UsageProvider {
         switch self {
         case .claude: return "sparkle"
         case .codex: return "chevron.left.forwardslash.chevron.right"
+        case .cursor: return "cursorarrow"
         }
     }
 
@@ -181,7 +194,7 @@ extension UsageProvider {
     /// each CLI reports its own limits. Colour severity is always driven by the used share.
     var showsRemaining: Bool {
         switch self {
-        case .claude: return false
+        case .claude, .cursor: return false
         case .codex: return true
         }
     }
@@ -190,6 +203,7 @@ extension UsageProvider {
         switch self {
         case .claude: return Color(red: 0.85, green: 0.47, blue: 0.34)
         case .codex: return Color(red: 0.25, green: 0.55, blue: 0.95)
+        case .cursor: return Color(red: 0.55, green: 0.45, blue: 0.85)
         }
     }
 }
@@ -236,6 +250,9 @@ struct MenuBarPanelView: View {
                 .padding(.vertical, PanelMetrics.rowInset)
 
             Divider()
+
+            CheckForUpdatesButton()
+                .padding(PanelMetrics.rowInset)
 
             PanelActionRow(title: "Quit VibeWindowManager", symbol: "power", shortcut: "⌘Q") {
                 NSApp.terminate(nil)
@@ -398,6 +415,7 @@ private struct UsageSection: View {
 
                 ProviderUsageCard(provider: .claude, usage: usage.claude, now: now)
                 ProviderUsageCard(provider: .codex, usage: usage.codex, now: now)
+                ProviderUsageCard(provider: .cursor, usage: usage.cursor, now: now)
             }
         }
     }

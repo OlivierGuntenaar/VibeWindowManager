@@ -1,3 +1,7 @@
 .DS_Store
 .derivedData
 build/
+
+__pycache__/
+
+*.profraw
