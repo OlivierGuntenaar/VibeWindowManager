@@ -58,9 +58,23 @@ final class UsageLimitsService: ObservableObject {
 
     private let fetchers: [UsageProvider: any UsageFetching]
     private var refreshTimer: Timer?
+    private var refreshTask: Task<Void, Never>?
+    private var refreshID: UUID?
+    private let makeTimer: (TimeInterval, @escaping @Sendable (Timer) -> Void) -> Timer
 
-    init(fetchers: [UsageProvider: any UsageFetching]) {
+    init(fetchers: [UsageProvider: any UsageFetching],
+         makeTimer: @escaping (TimeInterval, @escaping @Sendable (Timer) -> Void) -> Timer = { interval, action in
+             let timer = Timer(timeInterval: interval, repeats: true, block: action)
+             RunLoop.main.add(timer, forMode: .common)
+             return timer
+         }) {
         self.fetchers = fetchers
+        self.makeTimer = makeTimer
+    }
+
+    isolated deinit {
+        refreshTimer?.invalidate()
+        refreshTask?.cancel()
     }
 
     func usage(for provider: UsageProvider) -> ProviderUsage? {
@@ -76,18 +90,32 @@ final class UsageLimitsService: ObservableObject {
         guard !isRefreshing else { return }
         isRefreshing = true
         let fetchers = self.fetchers
-        Task { [weak self] in
+        let id = UUID()
+        refreshID = id
+        refreshTask = Task { [weak self] in
             await withTaskGroup(of: ProviderUsage.self) { group in
                 for fetcher in fetchers.values {
                     group.addTask { await fetcher.fetch() }
                 }
                 for await usage in group {
+                    guard !Task.isCancelled, self?.refreshID == id else { continue }
                     self?.store(usage)
                 }
             }
+            guard !Task.isCancelled, self?.refreshID == id else { return }
             self?.isRefreshing = false
             self?.lastRefreshed = Date()
+            self?.refreshTask = nil
+            self?.refreshID = nil
         }
+    }
+
+    /// Cancels this refresh without letting late responses overwrite a subsequent refresh.
+    func cancelRefresh() {
+        refreshTask?.cancel()
+        refreshTask = nil
+        refreshID = nil
+        isRefreshing = false
     }
 
     /// Called when the menu-bar panel opens: refresh only if the data is older than `maxAge`.
@@ -100,12 +128,12 @@ final class UsageLimitsService: ObservableObject {
 
     func startAutoRefresh(interval: TimeInterval = 5 * 60) {
         stopAutoRefresh()
-        // Added to the main run loop below, so the block always fires on the main thread.
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+        guard interval.isFinite, interval > 0 else { return }
+        let timer = makeTimer(interval) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
-        // .common so the timer keeps firing while a menu is tracking.
-        RunLoop.main.add(timer, forMode: .common)
+        // Allow macOS to coalesce periodic wakeups instead of waking at an exact instant.
+        timer.tolerance = min(interval * 0.1, 30)
         refreshTimer = timer
         refresh()
     }

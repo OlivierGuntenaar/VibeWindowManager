@@ -17,8 +17,8 @@ enum HTTPRequestParser {
     static func firstRequest(from buffer: inout Data) -> ParsedHeadRequest? {
         let needle = Data("\r\n\r\n".utf8)
         guard let r = buffer.range(of: needle) else { return nil }
-        let head = buffer.prefix(r.lowerBound)
-        buffer.removeSubrange(0..<r.upperBound)
+        let head = buffer[..<r.lowerBound]
+        buffer.removeSubrange(buffer.startIndex..<r.upperBound)
         guard let s = String(data: head, encoding: .utf8) else { return nil }
         var lines = s.components(separatedBy: "\r\n").filter { !$0.isEmpty }
         guard let first = lines.first else { return nil }

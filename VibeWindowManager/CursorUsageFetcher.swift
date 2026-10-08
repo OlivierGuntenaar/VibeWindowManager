@@ -37,6 +37,9 @@ nonisolated enum CursorUsageEngine {
         },
         transport: @escaping Transport = { try await URLSession.shared.data(for: $0) }
     ) async -> Snapshot {
+        guard !Task.isCancelled else {
+            return Snapshot(error: "Cursor usage refresh was cancelled.")
+        }
         guard let token = tokenLookup(), !token.isEmpty else {
             return Snapshot(error: "Sign in to Cursor to see your usage limits.")
         }
@@ -44,7 +47,12 @@ nonisolated enum CursorUsageEngine {
             async let usage = request("GetCurrentPeriodUsage", token: token, transport: transport)
             // A plan-label failure must not hide valid limits.
             async let info = try? request("GetPlanInfo", token: token, transport: transport)
-            return parse(try await usage, info: await info ?? [:])
+            let usageJSON = try await usage
+            let infoJSON = await info ?? [:]
+            try Task.checkCancellation()
+            return parse(usageJSON, info: infoJSON)
+        } catch is CancellationError {
+            return Snapshot(error: "Cursor usage refresh was cancelled.")
         } catch FetchError.status(let status) {
             switch status {
             case 401, 403: return Snapshot(error: "Cursor login expired or unavailable — open Cursor to sign in again.")
@@ -82,7 +90,9 @@ nonisolated enum CursorUsageEngine {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        try Task.checkCancellation()
         let (data, response) = try await transport(request)
+        try Task.checkCancellation()
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw FetchError.status(status) }
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {

@@ -51,20 +51,35 @@ enum TileMode: Hashable, Sendable {
 
 enum WindowLayoutEngine: Sendable {
 
+    /// Bounds allocations for caller-supplied counts, including CLI requests.
+    static let maximumLayoutCount = 1_024
+
+    private static func validFrame(_ frame: CGRect) -> Bool {
+        frame.origin.x.isFinite && frame.origin.y.isFinite &&
+        frame.size.width.isFinite && frame.size.height.isFinite &&
+        frame.width > 1 && frame.height > 1 && frame.maxX.isFinite && frame.maxY.isFinite
+    }
+
     /// Returns up to `count` non-overlapping slot rects; layout determines placement order (left, right, top, …).
     static func slotRects(visibleFrame: CGRect, mode: TileMode, count: Int) -> [CGRect] {
-        guard count > 0, visibleFrame.width > 1, visibleFrame.height > 1 else { return [] }
+        guard count > 0, validFrame(visibleFrame) else { return [] }
         let vf = visibleFrame
 
         switch mode {
         case .equalColumns(let requestedCount):
-            return equalColumns(visibleFrame: vf, count: min(count, max(1, requestedCount)))
+            let slots = min(count, max(1, requestedCount))
+            guard slots <= maximumLayoutCount else { return [] }
+            return equalColumns(visibleFrame: vf, count: slots)
 
         case .equalRows(let requestedCount):
-            return equalRows(visibleFrame: vf, count: min(count, max(1, requestedCount)))
+            let slots = min(count, max(1, requestedCount))
+            guard slots <= maximumLayoutCount else { return [] }
+            return equalRows(visibleFrame: vf, count: slots)
 
         case .grid(let requestedCount):
-            return adaptiveGrid(visibleFrame: vf, count: min(count, max(1, requestedCount)))
+            let slots = min(count, max(1, requestedCount))
+            guard slots <= maximumLayoutCount else { return [] }
+            return adaptiveGrid(visibleFrame: vf, count: slots)
 
         case .onePlusTwo:
             // One wide left column; right column top + bottom. Maps to 1–3 windows; extras ignored.
@@ -81,9 +96,13 @@ enum WindowLayoutEngine: Sendable {
     /// All windows share a large common size so the stack feels close to full screen.
     static func cascadeFrames(visibleFrame: CGRect, count: Int, insetStep: CGFloat, margin: CGFloat) -> [CGRect] {
         let vf = visibleFrame
-        guard count > 0 else { return [] }
+        guard count > 0, count <= maximumLayoutCount, validFrame(vf),
+              insetStep.isFinite, margin.isFinite, insetStep >= 0, margin >= 0 else { return [] }
 
         let totalInset = max(0, CGFloat(count - 1) * insetStep)
+        // Finite inputs can still overflow when multiplied or combined.
+        guard totalInset.isFinite, (margin * 2).isFinite,
+              (totalInset + margin * 2).isFinite else { return [] }
         let width = max(160, vf.width - (margin * 2) - totalInset)
         let height = max(120, vf.height - (margin * 2) - totalInset)
 
@@ -92,6 +111,7 @@ enum WindowLayoutEngine: Sendable {
             let offsetMultiplier = CGFloat(count - 1 - index)
             let x = vf.maxX - width - margin - (offsetMultiplier * insetStep)
             let y = vf.maxY - height - margin - (offsetMultiplier * insetStep)
+            guard x.isFinite, y.isFinite else { return [] }
             let rect = clampFrame(
                 CGRect(x: x, y: y, width: width, height: height).integral,
                 to: vf

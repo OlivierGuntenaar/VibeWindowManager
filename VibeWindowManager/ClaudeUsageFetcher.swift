@@ -32,30 +32,130 @@ import Foundation
 import CoreFoundation
 
 struct ClaudeUsageFetcher: UsageFetching {
-    /// Results younger than this are served from memory. The usage endpoint
-    /// rate-limits per token, so popover open/close must not hammer it.
-    var minimumRefreshInterval: TimeInterval = 60
-
-    private static var lastResult: ProviderUsage?
+    nonisolated static let maximumServerCooldown: TimeInterval = 7 * 24 * 60 * 60
+    var minimumRefreshInterval: TimeInterval = 5 * 60
 
     func fetch() async -> ProviderUsage {
-        if let cached = Self.lastResult,
-           cached.errorMessage == nil,
-           Date().timeIntervalSince(cached.fetchedAt) < minimumRefreshInterval {
-            return cached
+        await ClaudeRefreshCoordinator.shared.fetch(minimumRefreshInterval: minimumRefreshInterval)
+    }
+}
+
+/// One policy across panels/services: errors must not cause a retry on every popover opening.
+@MainActor
+final class ClaudeRefreshCoordinator {
+    static let shared = ClaudeRefreshCoordinator(
+        loader: { await ClaudeUsageFetcher.loadSnapshot() }, defaults: .standard
+    )
+    static let cooldownKey = "claudeUsage.nextAllowedAt"
+    static let rateLimitCountKey = "claudeUsage.rateLimitCount"
+
+    private let loader: () async -> ClaudeUsageFetcher.Snapshot
+    private let now: () -> Date
+    private let defaults: UserDefaults?
+    private var cached: ProviderUsage?
+    private var lastGood: ProviderUsage?
+    private(set) var nextAllowedAt: Date?
+    private var rateLimitCount = 0
+    private var inFlight: Task<ClaudeUsageFetcher.Snapshot, Never>?
+    private var requestID: UUID?
+    private var waiters: Set<UUID> = []
+    var activeWaiterCount: Int { waiters.count }
+
+    init(loader: @escaping () async -> ClaudeUsageFetcher.Snapshot,
+         now: @escaping () -> Date = Date.init, defaults: UserDefaults? = nil) {
+        self.loader = loader
+        self.now = now
+        self.defaults = defaults
+        let currentDate = now()
+        if let date = defaults?.object(forKey: Self.cooldownKey) as? Date,
+           date.timeIntervalSince1970.isFinite,
+           date.timeIntervalSince(currentDate) <= ClaudeUsageFetcher.maximumServerCooldown {
+            nextAllowedAt = date > currentDate ? date : nil
+            rateLimitCount = min(max(defaults?.integer(forKey: Self.rateLimitCountKey) ?? 0, 0), 5)
         }
-        let snapshot = await Self.loadSnapshot()
-        let usage = ProviderUsage(
-            provider: .claude,
-            planName: snapshot.planName,
-            windows: snapshot.errorMessage == nil
-                ? snapshot.windows.map { UsageWindow(label: $0.label, usedPercent: $0.usedPercent, resetsAt: $0.resetsAt) }
-                : [],
-            fetchedAt: Date(),
-            errorMessage: snapshot.errorMessage
-        )
-        Self.lastResult = usage
+    }
+
+    func fetch(minimumRefreshInterval: TimeInterval = 300) async -> ProviderUsage {
+        guard !Task.isCancelled else { return cancelledUsage() }
+        if let nextAllowedAt, now() < nextAllowedAt {
+            return cached ?? ProviderUsage(provider: .claude, planName: nil, windows: [], fetchedAt: now(),
+                errorMessage: "Claude usage refresh is cooling down. Retrying automatically.")
+        }
+        let interval = minimumRefreshInterval.isFinite ? min(max(300, minimumRefreshInterval), 3600) : 300
+        let task: Task<ClaudeUsageFetcher.Snapshot, Never>
+        let id: UUID
+        if let active = inFlight, let activeID = requestID {
+            task = active
+            id = activeID
+        } else {
+            id = UUID()
+            let load = loader
+            task = Task { await load() }
+            inFlight = task
+            requestID = id
+        }
+        let waiter = UUID()
+        waiters.insert(waiter)
+        let snapshot = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.removeCancelledWaiter(waiter, request: id) }
+        }
+        guard !Task.isCancelled else {
+            removeCancelledWaiter(waiter, request: id)
+            return cancelledUsage()
+        }
+        waiters.remove(waiter)
+        // Only the first active waiter commits this response; obsolete requests cannot replace it.
+        guard requestID == id else { return cached ?? cancelledUsage() }
+        inFlight = nil
+        requestID = nil
+        waiters.removeAll()
+        guard !snapshot.isCancelled else { return cancelledUsage() }
+
+        let fetchedAt = now()
+        let rateLimited = snapshot.httpStatus == 429
+        if rateLimited { rateLimitCount = min(rateLimitCount + 1, 5) }
+        else if snapshot.errorMessage == nil { rateLimitCount = 0 }
+        let delay = rateLimited ? max(interval, min(300 * pow(2, Double(rateLimitCount - 1)), 3600)) : interval
+        var retryAt = fetchedAt.addingTimeInterval(delay)
+        if let serverDate = snapshot.retryAfter, serverDate.timeIntervalSince1970.isFinite, serverDate > retryAt {
+            retryAt = min(serverDate, fetchedAt.addingTimeInterval(ClaudeUsageFetcher.maximumServerCooldown))
+        }
+        nextAllowedAt = retryAt
+        defaults?.set(retryAt, forKey: Self.cooldownKey)
+        defaults?.set(rateLimitCount, forKey: Self.rateLimitCountKey)
+
+        let usage: ProviderUsage
+        if let error = snapshot.errorMessage, snapshot.isTransient, let lastGood {
+            usage = ProviderUsage(provider: .claude, planName: lastGood.planName, windows: lastGood.windows,
+                                  fetchedAt: lastGood.fetchedAt,
+                                  errorMessage: "Showing cached usage. " + error)
+        } else {
+            usage = ProviderUsage(provider: .claude, planName: snapshot.planName,
+                                  windows: snapshot.errorMessage == nil ? snapshot.windows.map {
+                                      UsageWindow(label: $0.label, usedPercent: $0.usedPercent, resetsAt: $0.resetsAt)
+                                  } : [], fetchedAt: fetchedAt, errorMessage: snapshot.errorMessage)
+        }
+        cached = usage
+        if snapshot.errorMessage == nil { lastGood = usage }
+        else if !snapshot.isTransient { lastGood = nil }
         return usage
+    }
+
+    private func removeCancelledWaiter(_ waiter: UUID, request id: UUID) {
+        guard requestID == id else { return }
+        waiters.remove(waiter)
+        if waiters.isEmpty {
+            inFlight?.cancel()
+            inFlight = nil
+            requestID = nil
+        }
+    }
+
+    private func cancelledUsage() -> ProviderUsage {
+        cached ?? ProviderUsage(provider: .claude, planName: nil, windows: [], fetchedAt: now(),
+                                errorMessage: "Claude usage refresh cancelled.")
     }
 }
 
@@ -72,6 +172,10 @@ extension ClaudeUsageFetcher {
         var planName: String?
         var windows: [RawWindow] = []
         var errorMessage: String?
+        var httpStatus: Int?
+        var retryAfter: Date?
+        var isTransient = false
+        var isCancelled = false
     }
 
     nonisolated struct OAuthCredential: Sendable {
@@ -96,26 +200,31 @@ extension ClaudeUsageFetcher {
     nonisolated static let keychainService = "Claude Code-credentials"
 
     @concurrent
-    nonisolated static func loadSnapshot() async -> Snapshot {
+    nonisolated static func loadSnapshot(
+        credentialLookup: @escaping @Sendable () async -> CredentialLookup = { await lookUpCredential() },
+        transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) },
+        configPlan: @escaping @Sendable () -> String? = { planNameFromClaudeConfig() },
+        now: @escaping @Sendable () -> Date = Date.init
+    ) async -> Snapshot {
         var snapshot = Snapshot()
 
         let credential: OAuthCredential
-        switch await lookUpCredential() {
+        switch await credentialLookup() {
         case .found(let c):
             credential = c
         case .expired(let c):
             snapshot.planName = planName(subscriptionType: c.subscriptionType, rateLimitTier: c.rateLimitTier)
-                ?? planNameFromClaudeConfig()
+                ?? configPlan()
             snapshot.errorMessage = "Claude token expired — open Claude Code to refresh it."
             return snapshot
         case .missing(let reason):
-            snapshot.planName = planNameFromClaudeConfig()
+            snapshot.planName = configPlan()
             snapshot.errorMessage = reason
             return snapshot
         }
 
         snapshot.planName = planName(subscriptionType: credential.subscriptionType, rateLimitTier: credential.rateLimitTier)
-            ?? planNameFromClaudeConfig()
+            ?? configPlan()
 
         var request = URLRequest(url: usageURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         request.httpMethod = "GET"
@@ -128,13 +237,21 @@ extension ClaudeUsageFetcher {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (data, response) = try await transport(request)
         } catch {
+            snapshot.isCancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
+            snapshot.isTransient = true
             snapshot.errorMessage = "Couldn't reach Anthropic: \(error.localizedDescription)"
             return snapshot
         }
 
+        guard !Task.isCancelled else {
+            snapshot.isCancelled = true
+            return snapshot
+        }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        snapshot.httpStatus = status
+        snapshot.retryAfter = retryDate((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After"), now: now())
         switch status {
         case 200:
             break
@@ -145,14 +262,17 @@ extension ClaudeUsageFetcher {
             snapshot.errorMessage = "Usage not available for this login (403) — sign in to Claude Code with a Pro/Max account."
             return snapshot
         case 429:
-            snapshot.errorMessage = "Usage endpoint rate-limited (429) — try again in a few minutes."
+            snapshot.isTransient = true
+            snapshot.errorMessage = "Anthropic temporarily limited usage checks (429). Retrying automatically after the cooldown."
             return snapshot
         default:
+            snapshot.isTransient = status == 0 || status >= 500
             snapshot.errorMessage = "Usage request failed (HTTP \(status))."
             return snapshot
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            snapshot.isTransient = true
             snapshot.errorMessage = "Unexpected usage response from Anthropic."
             return snapshot
         }
@@ -161,6 +281,21 @@ extension ClaudeUsageFetcher {
             snapshot.errorMessage = "No usage limits reported for this account."
         }
         return snapshot
+    }
+
+    nonisolated static func retryDate(_ header: String?, now: Date) -> Date? {
+        guard let raw = header?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        // RFC delay-seconds is a nonnegative decimal integer, not arbitrary floating-point syntax.
+        if raw.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) {
+            guard let seconds = Double(raw), seconds.isFinite else { return nil }
+            return now.addingTimeInterval(min(seconds, maximumServerCooldown))
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = formatter.date(from: raw) else { return nil }
+        return min(date, now.addingTimeInterval(maximumServerCooldown))
     }
 
     // MARK: Parsing

@@ -74,9 +74,17 @@ enum VibeWebSocketFraming {
                 i = 4
             } else if payloadLen == 127 {
                 guard b.count >= 10 else { return }
-                var l = 0
-                for j in 0..<8 { l = (l << 8) | Int(b[2 + j]) }
-                payloadLen = l
+                var length: UInt64 = 0
+                for j in 0..<8 { length = (length << 8) | UInt64(b[2 + j]) }
+                // Reject lengths that cannot fit with their header before converting
+                // to Int or forming a range. Untrusted 64-bit lengths can overflow.
+                let headerLength = 10 + (masked ? 4 : 0)
+                guard length <= UInt64(Int.max - headerLength) else {
+                    clientClosed = true
+                    buffer.removeAll()
+                    return
+                }
+                payloadLen = Int(length)
                 i = 10
             }
             let maskKeyLen = masked ? 4 : 0

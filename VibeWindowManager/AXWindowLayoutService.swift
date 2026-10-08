@@ -25,7 +25,9 @@ struct ManagedWindow: Identifiable {
 
 @MainActor
 struct AXWindowLayoutService {
-    var isProcessTrusted: Bool { AXIsProcessTrusted() }
+    var trustedCheck: () -> Bool = { AXIsProcessTrusted() }
+
+    var isProcessTrusted: Bool { trustedCheck() }
 
     /// Prompts for accessibility (once) and opens the Privacy pane if the user can grant access.
     func requestAccessibilityIfNeeded() {
@@ -159,6 +161,7 @@ struct AXWindowLayoutService {
 
     /// Applies tiling to the first N windows. Windows beyond `slots.count` are unchanged.
     func applyTile(visibleFrame: CGRect, mode: TileMode, to windows: [AXUIElement], allScreens: [NSScreen]) throws {
+        guard isProcessTrusted else { throw LayoutError.notTrusted }
         let slots = WindowLayoutEngine.slotRects(visibleFrame: visibleFrame, mode: mode, count: windows.count)
         for (i, win) in windows.enumerated() where i < slots.count {
             try setFrame(win, slots[i], allScreens: allScreens)
@@ -166,6 +169,7 @@ struct AXWindowLayoutService {
     }
 
     func applyCascade(visibleFrame: CGRect, to windows: [AXUIElement], allScreens: [NSScreen], insetStep: CGFloat) throws {
+        guard isProcessTrusted else { throw LayoutError.notTrusted }
         let frames = WindowLayoutEngine.cascadeFrames(
             visibleFrame: visibleFrame,
             count: windows.count,
