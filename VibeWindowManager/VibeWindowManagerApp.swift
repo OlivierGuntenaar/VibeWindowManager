@@ -41,7 +41,7 @@ struct VibeWindowManagerApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: MainWindowID.main.rawValue) {
+        Window("VibeWindowManager", id: MainWindowID.main.rawValue) {
             ContentView()
                 .environmentObject(bridge)
         }
@@ -145,6 +145,83 @@ private enum VibeServerMenuFormat {
     }
 }
 
+/// Raises the one main window, or opens it when none is on screen or in the Dock.
+///
+/// A main window can become key, sits at normal level, is titled and closable, is not a sheet,
+/// and is visible or minimized. Calibration overlays, click ripples, and menu-bar panels are not.
+/// The key window wins; otherwise the newest window number does.
+@MainActor
+enum ShowMainWindow {
+    struct Candidate: Equatable {
+        var canBecomeKey: Bool
+        var level: NSWindow.Level
+        var styleMask: NSWindow.StyleMask
+        var isSheet: Bool
+        var isVisible: Bool
+        var isMiniaturized: Bool
+        var isKeyWindow: Bool
+        /// Higher numbers were created later. A window that has never been on screen stays at 0.
+        var windowNumber: Int
+
+        static func from(_ window: NSWindow) -> Candidate {
+            Candidate(
+                canBecomeKey: window.canBecomeKey,
+                level: window.level,
+                styleMask: window.styleMask,
+                isSheet: window.isSheet,
+                isVisible: window.isVisible,
+                isMiniaturized: window.isMiniaturized,
+                isKeyWindow: window.isKeyWindow,
+                windowNumber: window.windowNumber
+            )
+        }
+    }
+
+    enum Decision: Equatable {
+        case openWindow
+        case reuse(index: Int)
+    }
+
+    static func show(in windows: [NSWindow]? = nil, openWindow: () -> Void) {
+        NSApp.activate()
+        let windows = windows ?? NSApp.windows
+        switch decision(for: windows.map(Candidate.from)) {
+        case .openWindow:
+            openWindow()
+        case .reuse(let index):
+            let window = windows[index]
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    static func decision(for windows: [Candidate]) -> Decision {
+        let mainWindows = windows.enumerated().filter { isMainWindow($0.element) }
+        if let key = mainWindows.first(where: { $0.element.isKeyWindow }) {
+            return .reuse(index: key.offset)
+        }
+        guard let newest = mainWindows.max(by: { lhs, rhs in
+            if lhs.element.windowNumber != rhs.element.windowNumber {
+                return lhs.element.windowNumber < rhs.element.windowNumber
+            }
+            return lhs.offset < rhs.offset
+        }) else {
+            return .openWindow
+        }
+        return .reuse(index: newest.offset)
+    }
+
+    private static func isMainWindow(_ window: Candidate) -> Bool {
+        guard window.canBecomeKey else { return false }
+        guard window.level == .normal else { return false }
+        guard window.styleMask.contains(.titled), window.styleMask.contains(.closable) else { return false }
+        guard !window.isSheet else { return false }
+        return window.isVisible || window.isMiniaturized
+    }
+}
+
 private struct MenuBarExtraCommands: View {
     let mainWindowID: String
 
@@ -161,8 +238,9 @@ private struct MenuBarExtraCommands: View {
 
     var body: some View {
         Button("Show Window") {
-            NSApp.activate(ignoringOtherApps: true)
-            openWindow(id: mainWindowID)
+            ShowMainWindow.show {
+                openWindow(id: mainWindowID)
+            }
         }
 
         Toggle("iOS bridge server", isOn: Binding(
