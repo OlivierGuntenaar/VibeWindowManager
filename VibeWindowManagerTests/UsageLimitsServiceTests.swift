@@ -47,12 +47,13 @@ struct UsageLimitsServiceTests {
         #expect(fetcher.calls == 0)
     }
 
-    @Test func defaultWiringIncludesAllThreeProviders() {
+    @Test func defaultWiringIncludesAllFourProviders() {
         let fetchers = UsageLimitsService.defaultFetchers()
-        #expect(fetchers.count == 3)
+        #expect(fetchers.count == 4)
         #expect(fetchers[.claude] is ClaudeUsageFetcher)
         #expect(fetchers[.codex] is CodexUsageFetcher)
         #expect(fetchers[.cursor] is CursorUsageFetcher)
+        #expect(fetchers[.grokBot] is GrokBotUsageFetcher)
     }
 
     @Test func providersRunConcurrentlyAndPublishIndependently() async throws {

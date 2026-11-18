@@ -2,6 +2,8 @@
 .derivedData
 build/
 
+.sentryclirc
+
 __pycache__/
 
 *.profraw

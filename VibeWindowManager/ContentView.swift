@@ -8,12 +8,40 @@
 import AppKit
 import SwiftUI
 
-private enum MainTab: Hashable {
+private enum MainTab: String, CaseIterable, Hashable, Identifiable {
     case layout
     case bridge
+    case phoneSSH
     case media
     case servers
+    case tinytv
     case away
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .layout: "Window layouts"
+        case .phoneSSH: "Phone & SSH"
+        case .bridge: "iOS bridge"
+        case .media: "Media controls"
+        case .servers: "Local servers"
+        case .tinytv: "TinyTV"
+        case .away: "Remote desktop"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .layout: "rectangle.split.2x2"
+        case .phoneSSH: "terminal"
+        case .bridge: "iphone.and.arrow.forward"
+        case .media: "playpause"
+        case .servers: "server.rack"
+        case .tinytv: "tv"
+        case .away: "display.2"
+        }
+    }
 }
 
 enum LayoutProposal: Hashable {
@@ -31,12 +59,11 @@ enum LayoutProposal: Hashable {
 }
 
 struct ContentView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var bridge = VibeBridgeServer()
-    @StateObject private var media = MediaControlService()
-    @AppStorage("vibeMediaKeysEnabled") private var mediaKeysEnabled: Bool = false
-    @AppStorage("vibeMusicRedirectEnabled") private var musicRedirectEnabled: Bool = false
-    @AppStorage("vibeAirPodsCaptureEnabled") private var airPodsCaptureEnabled: Bool = false
-    @AppStorage("vibeF5NoiseToggleEnabled") private var f5NoiseToggleEnabled: Bool = false
+    // App-owned: it must outlive this window (see VibeWindowManagerApp).
+    @EnvironmentObject private var media: MediaControlService
+    @StateObject private var tinytv = TinyTVConvertService()
     @State private var service = AXWindowLayoutService()
     @State private var runningApps: [AppChoice] = []
     @State private var windows: [ManagedWindow] = []
@@ -58,32 +85,62 @@ struct ContentView: View {
     @State private var displayConfigurationRevision: Int = 0
 
     var body: some View {
-        TabView(selection: $mainTab) {
-            layoutTab
-                .tag(MainTab.layout)
-                .tabItem { Label("Layout", systemImage: "rectangle.split.2x1") }
-            bridgeTab
-                .tag(MainTab.bridge)
-                .tabItem { Label("iOS bridge", systemImage: "antenna.radiowaves.left.and.right") }
-            mediaTab
-                .tag(MainTab.media)
-                .tabItem { Label("Media", systemImage: "playpause") }
-            serversTab
-                .tag(MainTab.servers)
-                .tabItem { Label("Servers", systemImage: "server.rack") }
-            awayTab
-                .tag(MainTab.away)
-                .tabItem { Label("Away", systemImage: "display.2") }
+        NavigationSplitView {
+            VStack(alignment: .leading, spacing: 0) {
+                List(selection: Binding<MainTab?>(
+                    get: { mainTab },
+                    set: { if let tab = $0 { mainTab = tab } }
+                )) {
+                    Section("Workspace") {
+                        navigationRow(.layout)
+                        navigationRow(.media)
+                        navigationRow(.servers)
+                    }
+                    Section("Connected devices") {
+                        navigationRow(.phoneSSH)
+                        navigationRow(.bridge)
+                        navigationRow(.tinytv)
+                        navigationRow(.away)
+                    }
+                }
+                .listStyle(.sidebar)
+                .accessibilityIdentifier("main-sidebar")
+
+                Divider().padding(.horizontal, 16)
+                VStack(alignment: .leading, spacing: 12) {
+                    ReduceMotionControl()
+                    Label(bridge.isRunning ? "iOS bridge online" : "iOS bridge offline",
+                          systemImage: bridge.isRunning ? "circle.fill" : "circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+            }
+            .navigationSplitViewColumnWidth(min: 205, ideal: 220, max: 260)
+        } detail: {
+            Group {
+                switch mainTab {
+                case .layout: layoutTab
+                case .phoneSSH: PhoneSSHView()
+                case .bridge: bridgeTab
+                case .media: mediaTab
+                case .servers: serversTab
+                case .tinytv: tinytvTab
+                case .away: awayTab
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .navigationTitle(mainTab.title)
         }
-        .tabViewStyle(.automatic)
-        .background {
-            LinearGradient(
-                colors: [Color(nsColor: .controlBackgroundColor), Color(nsColor: .windowBackgroundColor)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 980, minHeight: 640)
+        .transaction { transaction in
+            if reduceMotion {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
         }
-        .frame(minWidth: 780, minHeight: 560)
         .onAppear {
             refreshAppsList()
             refreshStatus()
@@ -92,10 +149,6 @@ struct ContentView: View {
             if !bridge.isRunning {
                 bridge.start()
             }
-            media.setMediaKeysEnabled(mediaKeysEnabled)
-            media.setMusicInterceptionEnabled(musicRedirectEnabled)
-            media.setAirPodsCaptureEnabled(airPodsCaptureEnabled)
-            media.setF5NoiseToggleEnabled(f5NoiseToggleEnabled)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             service = AXWindowLayoutService()
@@ -117,6 +170,27 @@ struct ContentView: View {
         }
     }
 
+    private func navigationRow(_ tab: MainTab) -> some View {
+        Label(tab.title, systemImage: tab.symbol)
+            .font(.system(size: 13, weight: .medium))
+            .padding(.vertical, 6)
+            .tag(tab)
+    }
+
+    private func stepHeading(_ number: String, title: String, subtitle: String) -> some View {
+        HStack(spacing: 10) {
+            Text(number)
+                .font(.caption.weight(.bold).monospacedDigit())
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 28, height: 28)
+                .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     @ViewBuilder
     private var layoutTab: some View {
         ScrollView {
@@ -126,10 +200,12 @@ struct ContentView: View {
                 layoutProposalsCard
                 layoutPreviewCard
                 if let e = lastError {
-                    Text(e)
-                        .font(.caption)
+                    Label(e, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
                         .foregroundStyle(.red)
-                        .padding(.horizontal, 4)
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                 }
             }
             .padding(20)
@@ -143,7 +219,10 @@ struct ContentView: View {
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Arrange windows")
-                    .font(.title2.weight(.semibold))
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                Text("A little order. A lot more focus.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 HStack(spacing: 8) {
                     Group {
                         if trusted {
@@ -200,8 +279,8 @@ struct ContentView: View {
     private var layoutTargetCard: some View {
         let screens = availableScreens()
         return VStack(alignment: .leading, spacing: 12) {
-            Text("Target")
-                .font(.headline)
+            stepHeading("01", title: "Choose your workspace", subtitle: "Pick an app and the display you want to arrange.")
+            Divider().padding(.vertical, 4)
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("App")
@@ -237,23 +316,35 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(14)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBackground)
     }
 
     private var layoutProposalsCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Suggested layouts")
-                .font(.headline)
-            Text(splitSummaryText)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            stepHeading("02", title: "Find your layout", subtitle: splitSummaryText)
             if availableProposals.isEmpty {
-                Text("Grant Accessibility and select an app to inspect its windows.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.vertical, 8)
+                HStack(spacing: 12) {
+                    Image(systemName: service.isProcessTrusted ? "macwindow" : "lock.shield")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(service.isProcessTrusted ? "No windows to arrange yet" : "Allow Vibe to arrange your windows")
+                            .font(.subheadline.weight(.semibold))
+                        Text(service.isProcessTrusted
+                             ? "Open a window in the selected app, then refresh."
+                             : "Enable Accessibility in System Settings, then return here.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if !service.isProcessTrusted {
+                        Button("Open Settings", action: openAccessibilitySettings)
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .padding(.vertical, 18)
             } else {
                 LazyVGrid(
                     columns: [GridItem(.adaptive(minimum: 100, maximum: 132), spacing: 10, alignment: .top)],
@@ -272,7 +363,7 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(14)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBackground)
     }
@@ -280,8 +371,7 @@ struct ContentView: View {
     @ViewBuilder
     private var layoutPreviewCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Preview & apply")
-                .font(.headline)
+            stepHeading("03", title: "Make it yours", subtitle: "Preview the arrangement, set the window order, then apply.")
             if let preview = currentPreviewLayout, let visibleFrame = screenLayoutRect() {
                 HStack(alignment: .top, spacing: 16) {
                     LayoutPreviewView(
@@ -289,7 +379,7 @@ struct ContentView: View {
                         frames: preview.frames,
                         windows: windows
                     )
-                    .frame(minWidth: 360, idealWidth: 420, minHeight: 250, idealHeight: 290)
+                    .frame(minWidth: 300, idealWidth: 420, minHeight: 230, idealHeight: 290)
 
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Window order")
@@ -332,6 +422,8 @@ struct ContentView: View {
                                                 Image(systemName: "arrow.up")
                                             }
                                             .buttonStyle(.borderless)
+                                            .help("Move window up")
+                                            .accessibilityLabel("Move \(window.title) up")
                                             .disabled(index == 0)
                                             Button {
                                                 moveWindow(from: index, offset: 1)
@@ -339,6 +431,8 @@ struct ContentView: View {
                                                 Image(systemName: "arrow.down")
                                             }
                                             .buttonStyle(.borderless)
+                                            .help("Move window down")
+                                            .accessibilityLabel("Move \(window.title) down")
                                             .disabled(index == windows.count - 1)
                                         }
                                         .padding(.vertical, 6)
@@ -369,15 +463,13 @@ struct ContentView: View {
                     .padding(.vertical, 4)
             }
         }
-        .padding(14)
+        .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBackground)
     }
 
     private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color(nsColor: .controlBackgroundColor))
-            .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
+        VibeCardSurface()
     }
 
     @ViewBuilder
@@ -507,6 +599,10 @@ struct ContentView: View {
     @ViewBuilder
     private var serversTab: some View {
         ServersTabView(scanner: LocalServerScanService.shared)
+    }
+
+    private var tinytvTab: some View {
+        TinyTVTabView(converter: tinytv)
     }
 
     @ViewBuilder
@@ -1001,7 +1097,19 @@ private struct RunningAppIconGrid: View {
             }
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) {
+            if selected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color.accentColor)
+                    .background(Color(nsColor: .controlBackgroundColor), in: Circle())
+                    .padding(5)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .accessibilityLabel(choice.label)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .help(choice.label)
     }
 
     private func appIconImage(for choice: AppChoice) -> NSImage? {
@@ -1271,7 +1379,18 @@ private struct LayoutProposalThumbnail: View {
             .shadow(color: isSelected ? Color.accentColor.opacity(0.18) : .clear, radius: isSelected ? 4 : 0, y: 1)
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) {
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color.accentColor)
+                    .background(Color(nsColor: .controlBackgroundColor), in: Circle())
+                    .padding(5)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .accessibilityLabel(proposal.label)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
     private var engineVisibleFrame: CGRect {
@@ -1318,6 +1437,20 @@ private struct LayoutProposalThumbnail: View {
     }
 }
 
+/// Shared surface for the main workspace and device tools.
+struct VibeCardSurface: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Color(nsColor: .controlBackgroundColor))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor).opacity(0.35), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.035), radius: 8, y: 3)
+    }
+}
+
 #Preview {
     ContentView()
+        .environmentObject(MediaControlService())
 }

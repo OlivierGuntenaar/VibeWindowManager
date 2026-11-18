@@ -10,7 +10,7 @@
 import Combine
 import Foundation
 
-enum UsageProvider: String { case claude, codex, cursor }
+enum UsageProvider: String { case claude, codex, cursor, grokBot }
 
 /// One rate-limit window, e.g. "Session" (5h) or "Weekly".
 struct UsageWindow: Identifiable, Equatable {
@@ -27,6 +27,8 @@ struct ProviderUsage: Equatable {
     let windows: [UsageWindow]
     let fetchedAt: Date
     let errorMessage: String?
+    var requiresKeychainAccess = false
+    var sourceNote: String? = nil
 }
 
 protocol UsageFetching { func fetch() async -> ProviderUsage }
@@ -46,13 +48,16 @@ final class UsageLimitsService: ObservableObject {
             .claude: ClaudeUsageFetcher(),
             .codex: CodexUsageFetcher(),
             .cursor: CursorUsageFetcher(),
+            .grokBot: GrokBotUsageFetcher(),
         ]
     }
 
     @Published private(set) var claude: ProviderUsage?
     @Published private(set) var codex: ProviderUsage?
     @Published private(set) var cursor: ProviderUsage?
+    @Published private(set) var grokBot: ProviderUsage?
     @Published private(set) var isRefreshing = false
+    @Published private(set) var isAuthorizingClaude = false
     /// When the last full refresh (all providers) finished.
     @Published private(set) var lastRefreshed: Date?
 
@@ -82,6 +87,7 @@ final class UsageLimitsService: ObservableObject {
         case .claude: return claude
         case .codex: return codex
         case .cursor: return cursor
+        case .grokBot: return grokBot
         }
     }
 
@@ -107,6 +113,20 @@ final class UsageLimitsService: ObservableObject {
             self?.lastRefreshed = Date()
             self?.refreshTask = nil
             self?.refreshID = nil
+        }
+    }
+
+    /// Only an explicit user action may open macOS's Keychain authorization dialog.
+    func authorizeClaudeKeychain() {
+        guard !isAuthorizingClaude else { return }
+        isAuthorizingClaude = true
+        Task {
+            let result = await ClaudeKeychain.read(allowInteraction: true)
+            isAuthorizingClaude = false
+            if case .found = result {
+                ClaudeRefreshCoordinator.shared.keychainAccessWasGranted()
+                refresh()
+            }
         }
     }
 
@@ -155,6 +175,7 @@ final class UsageLimitsService: ObservableObject {
         case .claude: claude = usage
         case .codex: codex = usage
         case .cursor: cursor = usage
+        case .grokBot: grokBot = usage
         }
     }
 }

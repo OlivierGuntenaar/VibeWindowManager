@@ -16,6 +16,10 @@ private enum MainWindowID: String {
 @main
 struct VibeWindowManagerApp: App {
     @StateObject private var bridge = VibeBridgeServer()
+    // Owned by the app, not by ContentView: the media-key event tap registers an unretained pointer
+    // to this object, and closing the main window used to deallocate it — the next media key then
+    // crashed the app. It also means media keys keep working with the window closed.
+    @StateObject private var media = MediaControlService()
     init() {
         if Self.isTestHostProcess { return }
         if WindowCLI.shouldRun(arguments: CommandLine.arguments) {
@@ -55,9 +59,12 @@ struct VibeWindowManagerApp: App {
             if !Self.isTestHostProcess {
                 ContentView()
                     .environmentObject(bridge)
+                    .environmentObject(media)
             }
         }
+        .defaultSize(width: 1120, height: 820)
         .commands {
+            ReduceMotionCommands()
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesButton()
             }

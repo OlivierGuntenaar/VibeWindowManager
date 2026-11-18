@@ -179,6 +179,7 @@ extension UsageProvider {
         case .claude: return "Claude"
         case .codex: return "Codex"
         case .cursor: return "Cursor"
+        case .grokBot: return "Grok Bot"
         }
     }
 
@@ -187,6 +188,7 @@ extension UsageProvider {
         case .claude: return "sparkle"
         case .codex: return "chevron.left.forwardslash.chevron.right"
         case .cursor: return "cursorarrow"
+        case .grokBot: return "bolt"
         }
     }
 
@@ -194,7 +196,7 @@ extension UsageProvider {
     /// each CLI reports its own limits. Colour severity is always driven by the used share.
     var showsRemaining: Bool {
         switch self {
-        case .claude, .cursor: return false
+        case .claude, .cursor, .grokBot: return false
         case .codex: return true
         }
     }
@@ -204,6 +206,7 @@ extension UsageProvider {
         case .claude: return Color(red: 0.85, green: 0.47, blue: 0.34)
         case .codex: return Color(red: 0.25, green: 0.55, blue: 0.95)
         case .cursor: return Color(red: 0.55, green: 0.45, blue: 0.85)
+        case .grokBot: return Color(red: 0.35, green: 0.65, blue: 0.75)
         }
     }
 }
@@ -225,6 +228,7 @@ struct MenuBarPanelView: View {
     @ObservedObject var usage: UsageLimitsService = .shared
     @ObservedObject var servers: LocalServerScanService = .shared
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @AppStorage("menuBarPanel.serversExpanded") private var serversExpanded = true
     @AppStorage("menuBarPanel.backgroundExpanded") private var backgroundExpanded = false
@@ -261,6 +265,12 @@ struct MenuBarPanelView: View {
             .padding(PanelMetrics.rowInset)
         }
         .frame(width: PanelMetrics.width)
+        .transaction { transaction in
+            if reduceMotion {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
+        }
         .background(PanelWindowReader { windowBox.window = $0 })
         .onAppear { panelDidOpen() }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
@@ -304,6 +314,10 @@ struct MenuBarPanelView: View {
                     }
                 )
             )
+
+            ReduceMotionControl()
+                .padding(.horizontal, PanelMetrics.rowInset)
+                .padding(.vertical, 5)
 
             PanelActionRow(title: "Cascade Cursor (extra display…)", symbol: "rectangle.stack", shortcut: "⇧⌘C") {
                 closePanel()
@@ -390,6 +404,11 @@ struct MenuBarPanelView: View {
 private struct UsageSection: View {
     @ObservedObject var usage: UsageLimitsService
 
+    private var claudeRetry: (() -> Void)? {
+        guard usage.claude?.requiresKeychainAccess == true else { return nil }
+        return { usage.authorizeClaudeKeychain() }
+    }
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             let now = context.date
@@ -413,9 +432,12 @@ private struct UsageSection: View {
                     }
                 }
 
-                ProviderUsageCard(provider: .claude, usage: usage.claude, now: now)
+                ProviderUsageCard(provider: .claude, usage: usage.claude, now: now,
+                    retry: claudeRetry,
+                    isRetrying: usage.isAuthorizingClaude)
                 ProviderUsageCard(provider: .codex, usage: usage.codex, now: now)
                 ProviderUsageCard(provider: .cursor, usage: usage.cursor, now: now)
+                ProviderUsageCard(provider: .grokBot, usage: usage.grokBot, now: now)
             }
         }
     }
@@ -425,6 +447,8 @@ private struct ProviderUsageCard: View {
     let provider: UsageProvider
     let usage: ProviderUsage?
     let now: Date
+    var retry: (() -> Void)? = nil
+    var isRetrying = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -439,11 +463,27 @@ private struct ProviderUsageCard: View {
                     PlanBadge(text: plan, tint: provider.tint)
                 }
                 Spacer(minLength: 0)
+                if isRetrying {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .frame(width: 20, height: 20)
+                        .accessibilityLabel("Waiting for Claude Keychain access")
+                } else if let retry {
+                    PanelIconButton(symbol: "arrow.clockwise",
+                        help: "Reconnect Claude — may request Keychain access", action: retry)
+                        .accessibilityLabel("Reconnect Claude")
+                        .accessibilityIdentifier("claude-keychain-retry")
+                }
             }
 
             if let usage {
                 ForEach(usage.windows) { window in
                     UsageWindowRow(window: window, now: now, showsRemaining: provider.showsRemaining)
+                }
+                if let note = usage.sourceNote {
+                    Text(verbatim: note + " · " + UsageFormat.updatedText(usage.fetchedAt, now: now))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
                 if let error = usage.errorMessage, !error.isEmpty {
                     // Errors may carry inline markdown (e.g. "run `claude` in a terminal and /login");

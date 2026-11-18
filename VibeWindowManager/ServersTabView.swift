@@ -338,12 +338,7 @@ struct ServersTabView: View {
     }
 
     private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(Color(nsColor: .controlBackgroundColor).opacity(0.6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08))
-            )
+        VibeCardSurface()
     }
 }
 

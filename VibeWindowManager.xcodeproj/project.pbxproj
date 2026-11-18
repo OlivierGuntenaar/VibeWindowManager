@@ -52,6 +52,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C7A5A03389994AECA7B42A41 /* Sentry in Frameworks */,
 				A01000000000000000000003 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -103,6 +104,7 @@
 				753F6A652F9A72BF00413ED0 /* Sources */,
 				753F6A662F9A72BF00413ED0 /* Frameworks */,
 				753F6A672F9A72BF00413ED0 /* Resources */,
+				DC47BB6AB1BE47E3BC1591A5 /* Upload Debug Symbols to Sentry */,
 			);
 			buildRules = (
 			);
@@ -113,6 +115,7 @@
 			);
 			name = VibeWindowManager;
 			packageProductDependencies = (
+				6B0F6E247950454D9663EE0D /* Sentry */,
 				A01000000000000000000002 /* Sparkle */,
 			);
 			productName = VibeWindowManager;
@@ -207,6 +210,7 @@
 				753F6A812F9A72C200413ED0 /* VibeWindowManagerUITests */,
 			);
 			packageReferences = (
+				737354AABE4749C39768DA51 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				A01000000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 		};
@@ -427,6 +431,8 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_USER_SCRIPT_SANDBOXING = "NO";
 			};
 			name = Debug;
 		};
@@ -463,6 +469,8 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_USER_SCRIPT_SANDBOXING = "NO";
 			};
 			name = Release;
 		};
@@ -587,7 +595,34 @@
 		};
 /* End XCConfigurationList section */
 
-
+/* Begin PBXShellScriptBuildPhase section */
+		DC47BB6AB1BE47E3BC1591A5 /* Upload Debug Symbols to Sentry */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${TARGET_NAME}",
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# This script is responsible for uploading debug symbols and source context for Sentry.
+if which sentry-cli >/dev/null; then
+  export SENTRY_ORG=thomas-guntenaar
+  export SENTRY_PROJECT=vibe-code-manager
+  ERROR=$(sentry-cli debug-files upload --include-sources \"$DWARF_DSYM_FOLDER_PATH\" 2>&1 >/dev/null)
+  if [ ! $? -eq 0 ]; then
+    echo \"warning: sentry-cli - $ERROR\"
+  fi
+else
+  echo \"warning: sentry-cli not installed, download from https://github.com/getsentry/sentry-cli/releases\"
+fi
+";
+			name = "Upload Debug Symbols to Sentry";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin XCRemoteSwiftPackageReference section */
 		A01000000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
@@ -595,7 +630,14 @@
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
 			requirement = { kind = exactVersion; version = 2.10.0; };
 		};
-
+		737354AABE4749C39768DA51 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa/";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -604,11 +646,16 @@
 			package = A01000000000000000000001 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
 		};
-
+		6B0F6E247950454D9663EE0D /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 737354AABE4749C39768DA51 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
 /* End XCSwiftPackageProductDependency section */
 
 /* Begin PBXBuildFile section */
 		A01000000000000000000003 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A01000000000000000000002 /* Sparkle */; };
+		C7A5A03389994AECA7B42A41 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 6B0F6E247950454D9663EE0D /* Sentry */; };
 /* End PBXBuildFile section */
 	};
 	rootObject = 753F6A612F9A72BF00413ED0 /* Project object */;

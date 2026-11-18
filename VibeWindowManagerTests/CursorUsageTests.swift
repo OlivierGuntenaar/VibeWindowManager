@@ -183,7 +183,7 @@ struct CursorUsageTests {
         }
         let expected: String
         switch status {
-        case 401, 403: expected = "Cursor login expired or unavailable — open Cursor to sign in again."
+        case 401, 403: expected = "Cursor rejected the usage login. Reconnect Cursor Agent."
         case 429: expected = "Cursor usage is rate-limited — try again in a few minutes."
         default: expected = "Cursor usage request failed (HTTP \(status))."
         }
@@ -223,7 +223,7 @@ struct CursorUsageTests {
             Issue.record("A missing credential must not trigger a network request")
             throw URLError(.badURL)
         }
-        #expect(result.error == "Sign in to Cursor to see your usage limits.")
+        #expect(result.error == "Cursor usage needs a readable login. Open Cursor Agent and sign in.")
         #expect(result.windows.isEmpty)
     }
 

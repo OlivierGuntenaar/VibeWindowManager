@@ -46,6 +46,12 @@ To **read terminal text** on the phone/tablet (not just window outlines), run yo
 
 If you have both projects cloned as siblings, paths like `../VibeWindowManagerIOS` match that layout.
 
+## Phone and SSH
+
+Open **Phone & SSH** to enable this Mac’s private Tailscale terminal gateway, pair an iPhone with a two-minute QR code, import named aliases from `~/.ssh/config`, and revoke paired devices. **Use Mac mini** manages the mini gateway through the existing SSH connection. The phone can switch between paired Macs and import aliases itself. Keys remain on the Mac making each SSH connection. The laptop must stay awake for laptop-hosted sessions; use the mini for sessions that should survive closing the laptop.
+
+The runtime is packaged from the sibling iOS repository with `python3 ../VibeWindowManagerIOS/server/bundle_desktop.py`. See that repository’s `server/README.md` for protocol and setup details.
+
 ## Share a desktop test build
 
 Run `python3 scripts/build-release.py 1.0.2 5` to build a universal Mac DMG with
@@ -53,8 +59,36 @@ Sparkle updates. No paid Apple developer account is needed for this unnotarized
 test build. See [shipping and updates](docs/SHIPPING.md) for installation, release
 publishing, and protecting the update signing key.
 
-The menu-bar usage panel includes Claude, Codex, and Cursor. Cursor reads its own
-local login from its SQLite settings database (read-only) and requests current
-Auto/API pool limits from Cursor's DashboardService. It never refreshes or logs
-Cursor tokens. This is Cursor's internal app API, so future API changes may require
-an update. Missing/expired logins and unavailable limits are shown explicitly.
+The menu-bar usage panel includes Claude, Codex, Cursor, and Grok Bot. Claude shows the
+Pro/Max subscription allowance using the saved Claude Code login. It renews expired
+access directly with Anthropic and securely saves rotated credentials, without
+opening Claude Code or making model requests. Usage refreshes are shared and cached
+for at least five minutes. Rate limits honor `Retry-After` and use increasing
+cooldowns that survive relaunches. A revoked login requires a one-time sign-in;
+ordinary access-token expiry renews automatically. Keychain reads and writes use
+Apple's `security` tool consistently to preserve its trusted signing identity.
+Background checks pause when the Keychain is locked or access is denied; use
+the reload icon beside **Claude** to authorize it explicitly. Credentials that exceed the
+system tool's input limit are rejected without modifying the existing item.
+
+Cursor reads its local login from its SQLite settings database (read-only). Newer
+Cursor versions encrypt that token; Vibe instead uses an existing Cursor Agent CLI
+login after verifying its account matches Cursor and its token is still valid.
+Keychain reads require existing Apple-tool trust and never request approval in the
+background. Vibe never decrypts the desktop token, renews the CLI login, or logs tokens.
+
+Cursor's Auto/API pools and Grok Bot's weekly allowance have separate cards. Unified
+plans identify their weekly allowance as shared. Grok Bot uses the matching active
+account; a recent local usage snapshot is a timestamped fallback for other accounts,
+team sessions, or network failures. Expired snapshots are not shown as current usage.
+The DashboardService calls share a five-minute cache and persisted rate-limit
+backoff that honors `Retry-After`, including across app restarts. These are internal
+app APIs and storage formats, so future changes may require an update.
+
+Reduce Motion is available in the menu-bar panel, the VibeWindowManager app menu,
+and the main window’s sidebar. All three control the macOS setting and track changes
+made in System Settings. Vibe also suppresses its own animated transitions while
+Reduce Motion is enabled. macOS protects direct preference writes, so the app runs
+Apple’s built-in action through the bundled, signed **Vibe Toggle Reduce Motion**
+shortcut. On a new Mac, use **Set Up…** once and add that shortcut in Shortcuts.
+Subsequent clicks run it in the background. Launching Vibe never changes the setting.

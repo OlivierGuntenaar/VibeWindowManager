@@ -42,8 +42,10 @@ final class MediaControlService: ObservableObject {
         didSet { applyLaunchAtLogin() }
     }
 
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    // The tap callback holds an unretained pointer to `self`, so these must stay reachable from
+    // `deinit` (which is nonisolated) to guarantee the tap dies with the service.
+    private nonisolated(unsafe) var eventTap: CFMachPort?
+    private nonisolated(unsafe) var runLoopSource: CFRunLoopSource?
     private var workspaceObservers: [NSObjectProtocol] = []
     private let scriptQueue = DispatchQueue(label: "vibe.media.osascript")
     private var mediaKeysWanted = false
@@ -67,6 +69,33 @@ final class MediaControlService: ObservableObject {
                 self?.updateDecoyClaim()
             }
         })
+        applyPersistedSettings()
+    }
+
+    /// The app owns this service for the whole process lifetime, so it configures itself from the
+    /// same defaults the Media tab writes — media keys work at login, before any window is opened.
+    private func applyPersistedSettings() {
+        let defaults = UserDefaults.standard
+        setMediaKeysEnabled(defaults.bool(forKey: VibeAppPersistence.mediaKeysEnabledKey))
+        setF5NoiseToggleEnabled(defaults.bool(forKey: VibeAppPersistence.f5NoiseToggleEnabledKey))
+        setMusicInterceptionEnabled(defaults.bool(forKey: VibeAppPersistence.musicRedirectEnabledKey))
+        setAirPodsCaptureEnabled(defaults.bool(forKey: VibeAppPersistence.airPodsCaptureEnabledKey))
+    }
+
+    /// A live tap calls back through an unretained pointer to `self`. If this object is ever
+    /// deallocated with the tap still installed, the next media key press lands in freed memory —
+    /// which is exactly the crash seen on 2026-08-18 (incident 30103EF4) when SwiftUI tore the
+    /// service down with the main window. Ownership now prevents that; this is the backstop.
+    deinit {
+        if let eventTap {
+            CGEvent.tapEnable(tap: eventTap, enable: false)
+        }
+        if let runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+        if let eventTap {
+            CFMachPortInvalidate(eventTap)
+        }
     }
 
     // MARK: - Media key forwarding (event tap)
@@ -130,6 +159,11 @@ final class MediaControlService: ObservableObject {
         }
         if let runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+        if let eventTap {
+            // Invalidate rather than just dropping the reference: the callback carries a raw
+            // pointer to `self`, so the tap must be torn down deterministically.
+            CFMachPortInvalidate(eventTap)
         }
         runLoopSource = nil
         eventTap = nil

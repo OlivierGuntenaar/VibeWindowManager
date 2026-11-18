@@ -30,18 +30,17 @@ nonisolated enum CursorUsageEngine {
     typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
     @concurrent static func fetch(
-        tokenLookup: @Sendable () -> String? = {
-            let path = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb").path
-            return accessToken(databasePath: path)
-        },
-        transport: @escaping Transport = { try await URLSession.shared.data(for: $0) }
+        tokenLookup: @Sendable () async -> String? = { await CursorCredentials.shared.accessToken() },
+        transport: @escaping Transport = { try await CursorDashboardClient.shared.data(for: $0) }
     ) async -> Snapshot {
         guard !Task.isCancelled else {
             return Snapshot(error: "Cursor usage refresh was cancelled.")
         }
-        guard let token = tokenLookup(), !token.isEmpty else {
-            return Snapshot(error: "Sign in to Cursor to see your usage limits.")
+        guard let token = await tokenLookup(), !token.isEmpty else {
+            return Snapshot(error: "Cursor usage needs a readable login. Open Cursor Agent and sign in.")
+        }
+        guard !token.hasPrefix("cursor-safe-storage:") else {
+            return Snapshot(error: "Cursor’s saved login is encrypted. Sign in to Cursor Agent to connect usage.")
         }
         do {
             async let usage = request("GetCurrentPeriodUsage", token: token, transport: transport)
@@ -55,7 +54,7 @@ nonisolated enum CursorUsageEngine {
             return Snapshot(error: "Cursor usage refresh was cancelled.")
         } catch FetchError.status(let status) {
             switch status {
-            case 401, 403: return Snapshot(error: "Cursor login expired or unavailable — open Cursor to sign in again.")
+            case 401, 403: return Snapshot(error: "Cursor rejected the usage login. Reconnect Cursor Agent.")
             case 429: return Snapshot(error: "Cursor usage is rate-limited — try again in a few minutes.")
             default: return Snapshot(error: "Cursor usage request failed (HTTP \(status)).")
             }
@@ -65,6 +64,10 @@ nonisolated enum CursorUsageEngine {
     }
 
     static func accessToken(databasePath: String) -> String? {
+        databaseValue("cursorAuth/accessToken", databasePath: databasePath)
+    }
+
+    static func databaseValue(_ key: String, databasePath: String) -> String? {
         var database: OpaquePointer?
         guard sqlite3_open_v2(databasePath, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
             if let database { sqlite3_close(database) }
@@ -74,15 +77,16 @@ nonisolated enum CursorUsageEngine {
         sqlite3_busy_timeout(database, 1000)
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(database,
-            "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken' LIMIT 1",
+            "SELECT value FROM ItemTable WHERE key = ? LIMIT 1",
             -1, &statement, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, key, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         guard sqlite3_step(statement) == SQLITE_ROW,
               let bytes = sqlite3_column_text(statement, 0) else { return nil }
         return String(cString: bytes)
     }
 
-    private static func request(_ method: String, token: String, transport: Transport) async throws -> [String: Any] {
+    static func request(_ method: String, token: String, transport: Transport) async throws -> [String: Any] {
         let url = URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/\(method)")!
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
         request.httpMethod = "POST"

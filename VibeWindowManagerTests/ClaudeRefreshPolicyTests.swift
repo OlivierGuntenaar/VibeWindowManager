@@ -43,6 +43,20 @@ struct ClaudeRefreshPolicyTests {
         return check()
     }
 
+    @Test func keychainAuthorizationRetriesAccessErrorsButNeverBypasses429() async {
+        let clock = ClaudePolicyClock(), loader = ClaudePolicyLoader()
+        loader.responses = [.init(errorMessage: "Keychain blocked", isTransient: true, requiresKeychainAccess: true),
+                            limited(retry: clock.date.addingTimeInterval(7200)), success()]
+        let policy = ClaudeRefreshCoordinator(loader: loader.load, now: { clock.date })
+        #expect(await policy.fetch().requiresKeychainAccess)
+        policy.keychainAccessWasGranted()
+        #expect(await policy.fetch().errorMessage == "429 cooldown")
+        policy.keychainAccessWasGranted()
+        _ = await policy.fetch()
+        #expect(loader.calls == 2)
+        #expect(policy.nextAllowedAt == clock.date.addingTimeInterval(7200))
+    }
+
     @Test func successfulUsageIsCachedForAtLeastFiveMinutes() async {
         let clock = ClaudePolicyClock(), loader = ClaudePolicyLoader()
         loader.responses = [success(10), success(30)]

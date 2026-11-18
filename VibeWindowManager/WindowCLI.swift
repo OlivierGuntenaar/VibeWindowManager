@@ -12,6 +12,12 @@ enum VibeAppPersistence {
     /// When true (default), the bridge starts at launch and the menu/GUI toggles default to on.
     static let bridgeServerEnabledKey = "vibeBridgeServerEnabled"
 
+    /// Media-key routing toggles, written by the Media tab. `MediaControlService` reads them at
+    /// launch so forwarding is live before the main window is ever opened.
+    static let mediaKeysEnabledKey = "vibeMediaKeysEnabled"
+    static let musicRedirectEnabledKey = "vibeMusicRedirectEnabled"
+    static let airPodsCaptureEnabledKey = "vibeAirPodsCaptureEnabled"
+    static let f5NoiseToggleEnabledKey = "vibeF5NoiseToggleEnabled"
 }
 
 enum WindowCLICommand: Equatable {

@@ -9,7 +9,7 @@ final class LifecycleUITests: XCTestCase {
     private func assertUsableMainWindow(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
         app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10), file: file, line: line)
-        XCTAssertTrue(app.staticTexts["Your Mac, in flow"].waitForExistence(timeout: 5), file: file, line: line)
+        XCTAssertTrue(app.descendants(matching: .any)["main-sidebar"].firstMatch.waitForExistence(timeout: 5), file: file, line: line)
         XCTAssertTrue(app.menuBars.menuBarItems["Quick layout"].exists, file: file, line: line)
         XCTAssertEqual(app.state, .runningForeground, file: file, line: line)
     }
