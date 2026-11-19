@@ -37,7 +37,7 @@ nonisolated enum CursorUsageEngine {
             return Snapshot(error: "Cursor usage refresh was cancelled.")
         }
         guard let token = await tokenLookup(), !token.isEmpty else {
-            return Snapshot(error: "Cursor usage needs a readable login. Open Cursor Agent and sign in.")
+            return Snapshot(error: "Cursor usage needs a readable login. Sign in to Cursor Agent (the CLI), then choose Reconnect Cursor here. Opening the desktop app alone does not connect usage.")
         }
         guard !token.hasPrefix("cursor-safe-storage:") else {
             return Snapshot(error: "Cursor’s saved login is encrypted. Sign in to Cursor Agent to connect usage.")

@@ -223,7 +223,7 @@ struct CursorUsageTests {
             Issue.record("A missing credential must not trigger a network request")
             throw URLError(.badURL)
         }
-        #expect(result.error == "Cursor usage needs a readable login. Open Cursor Agent and sign in.")
+        #expect(result.error == "Cursor usage needs a readable login. Sign in to Cursor Agent (the CLI), then choose Reconnect Cursor here. Opening the desktop app alone does not connect usage.")
         #expect(result.windows.isEmpty)
     }
 

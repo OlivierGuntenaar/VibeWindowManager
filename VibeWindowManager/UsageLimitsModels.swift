@@ -10,7 +10,7 @@
 import Combine
 import Foundation
 
-enum UsageProvider: String { case claude, codex, cursor, grokBot }
+enum UsageProvider: String, CaseIterable { case claude, codex, cursor, grokBot }
 
 /// One rate-limit window, e.g. "Session" (5h) or "Weekly".
 struct UsageWindow: Identifiable, Equatable {
@@ -29,6 +29,11 @@ struct ProviderUsage: Equatable {
     let errorMessage: String?
     var requiresKeychainAccess = false
     var sourceNote: String? = nil
+
+    /// Setup failures and empty responses belong in the main window, not the quick meter list.
+    var hasUsableMeter: Bool {
+        windows.contains { $0.usedPercent.isFinite }
+    }
 }
 
 protocol UsageFetching { func fetch() async -> ProviderUsage }
@@ -58,6 +63,7 @@ final class UsageLimitsService: ObservableObject {
     @Published private(set) var grokBot: ProviderUsage?
     @Published private(set) var isRefreshing = false
     @Published private(set) var isAuthorizingClaude = false
+    @Published private(set) var isAuthorizingCursor = false
     /// When the last full refresh (all providers) finished.
     @Published private(set) var lastRefreshed: Date?
 
@@ -88,6 +94,23 @@ final class UsageLimitsService: ObservableObject {
         case .codex: return codex
         case .cursor: return cursor
         case .grokBot: return grokBot
+        }
+    }
+
+    var menuProviders: [UsageProvider] {
+        UsageProvider.allCases.filter { usage(for: $0)?.hasUsableMeter == true }
+    }
+
+    func authorizeCursorKeychain() {
+        guard !isAuthorizingCursor else { return }
+        isAuthorizingCursor = true
+        Task {
+            let token = await CursorCredentials.shared.accessToken(allowInteraction: true)
+            isAuthorizingCursor = false
+            if token != nil {
+                cancelRefresh()
+                refresh()
+            }
         }
     }
 

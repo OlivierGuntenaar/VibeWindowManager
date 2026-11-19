@@ -72,7 +72,7 @@ enum GrokBotUsageCache {
         var context = Context(account: account)
         let safe = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
         guard let encoded = account.addingPercentEncoding(withAllowedCharacters: safe),
-              let cache = read("sand.client.slice.account.\(encoded).weekly-usage.cache"), cache["schemaVersion"] as? Int == 2,
+              let cache = read("sand.client.slice.account.\(encoded).weekly-usage.cache"), let schema = cache["schemaVersion"] as? Int, [2, 3].contains(schema),
               let value = cache["value"] as? [String: Any], value["kind"] as? String == "present" else { return context }
         context.personalAccount = value["selectedTeamId"] is NSNull
         guard let reading = value["reading"] as? [String: Any], let usage = reading["usage"] as? [String: Any],

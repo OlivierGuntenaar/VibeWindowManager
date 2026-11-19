@@ -30,6 +30,20 @@ struct CursorDashboardTests {
         #expect(result.error?.contains("encrypted") == true)
     }
 
+    @Test func automaticCursorReadsNeverPromptAndReconnectCanRecoverFromDenial() {
+        for state in [ClaudeKeychain.Access.locked, .approvalRequired, .missing, .unavailable, .ready("other")] {
+            #expect(!CursorCredentials.canReadCLIKeychain(state, allowInteraction: false, blocked: false))
+        }
+        #expect(CursorCredentials.canReadCLIKeychain(.ready("cursor-user"), allowInteraction: false, blocked: false))
+        #expect(!CursorCredentials.canReadCLIKeychain(.ready("cursor-user"), allowInteraction: false, blocked: true))
+        for state in [ClaudeKeychain.Access.locked, .approvalRequired, .ready("cursor-user")] {
+            #expect(CursorCredentials.canReadCLIKeychain(state, allowInteraction: true, blocked: true))
+        }
+        for state in [ClaudeKeychain.Access.missing, .unavailable, .ready("other")] {
+            #expect(!CursorCredentials.canReadCLIKeychain(state, allowInteraction: true, blocked: true))
+        }
+    }
+
     @Test func cliTokenMustBeUnexpiredAndMatchTheDesktopAccount() throws {
         func token(_ subject: String, _ expires: Double) throws -> String {
             let data = try JSONSerialization.data(withJSONObject: ["sub": subject, "exp": expires])
@@ -122,7 +136,8 @@ struct GrokBotUsageTests {
         }
     }
 
-    @Test func cacheIsScopedToActiveAccountAndRejectsExpiredOrResetReadings() throws {
+    @Test(arguments: [2, 3, 99])
+    func cacheIsScopedToActiveAccountAndRejectsExpiredOrResetReadings(schema: Int) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -133,12 +148,17 @@ struct GrokBotUsageTests {
         let accountKey = "sand.client.slice.account.github%7Ctest.weekly-usage.cache"
         try write("sand.client.slice.client-meta.account-slot", ["schemaVersion": 1, "value": "github|test"])
         func snapshot(readAt: Double = 1999000, reset: Double = 3000000, expires: Double = 4000000, team: Any = NSNull()) -> [String: Any] {
-            ["schemaVersion": 2, "value": ["kind": "present", "selectedTeamId": team,
+            ["schemaVersion": schema, "value": ["kind": "present", "selectedTeamId": team,
                 "reading": ["readAtMs": readAt, "usage": ["percentUsed": 12, "nextResetMs": reset]], "expiresAtMs": expires]]
         }
         try write(accountKey, snapshot())
         let context = GrokBotUsageCache.load(root: root, now: now)
         #expect(context.account == "github|test")
+        if schema == 99 {
+            #expect(context.usage == nil)
+            #expect(!context.personalAccount)
+            return
+        }
         #expect(context.personalAccount)
         #expect(context.usage?.windows.first?.usedPercent == 12)
         #expect(context.usage?.sourceNote == "From Grok Bot")
