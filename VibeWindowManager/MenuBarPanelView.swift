@@ -238,7 +238,12 @@ struct MenuBarPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            UsageSection(usage: usage)
+            UsageSection(usage: usage, showDiagnostics: false) {
+                UserDefaults.standard.set(MainTab.usage.rawValue, forKey: MainTab.selectionKey)
+                closePanel()
+                openWindow(id: mainWindowID)
+                NSApp.activate(ignoringOtherApps: true)
+            }
                 .padding(PanelMetrics.padding)
 
             Divider()
@@ -401,12 +406,40 @@ struct MenuBarPanelView: View {
 
 // MARK: - Usage section
 
+struct UsageSettingsView: View {
+    @ObservedObject var usage: UsageLimitsService = .shared
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Connected meters appear in the menu bar. Connection messages and setup options stay here.")
+                    .foregroundStyle(.secondary)
+                Text("Usage comes from your signed-in accounts, whether or not their apps are open.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                UsageSection(usage: usage, showDiagnostics: true)
+            }
+            .padding(24)
+            .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .onAppear { usage.refreshIfStale() }
+    }
+}
+
 private struct UsageSection: View {
     @ObservedObject var usage: UsageLimitsService
+    let showDiagnostics: Bool
+    var manageUsage: (() -> Void)? = nil
 
-    private var claudeRetry: (() -> Void)? {
-        guard usage.claude?.requiresKeychainAccess == true else { return nil }
-        return { usage.authorizeClaudeKeychain() }
+    private func retry(for provider: UsageProvider) -> (() -> Void)? {
+        if provider == .claude, usage.claude?.requiresKeychainAccess == true {
+            return { usage.authorizeClaudeKeychain() }
+        }
+        if provider == .cursor, usage.cursor?.errorMessage != nil {
+            return { usage.authorizeCursorKeychain() }
+        }
+        return nil
     }
 
     var body: some View {
@@ -432,12 +465,24 @@ private struct UsageSection: View {
                     }
                 }
 
-                ProviderUsageCard(provider: .claude, usage: usage.claude, now: now,
-                    retry: claudeRetry,
-                    isRetrying: usage.isAuthorizingClaude)
-                ProviderUsageCard(provider: .codex, usage: usage.codex, now: now)
-                ProviderUsageCard(provider: .cursor, usage: usage.cursor, now: now)
-                ProviderUsageCard(provider: .grokBot, usage: usage.grokBot, now: now)
+                ForEach(showDiagnostics ? UsageProvider.allCases : usage.menuProviders, id: \.self) { provider in
+                    ProviderUsageCard(provider: provider, usage: usage.usage(for: provider), now: now,
+                        retry: showDiagnostics ? retry(for: provider) : nil,
+                        isRetrying: provider == .claude ? usage.isAuthorizingClaude :
+                            (provider == .cursor && usage.isAuthorizingCursor),
+                        showDiagnostics: showDiagnostics)
+                }
+                if !showDiagnostics {
+                    if usage.menuProviders.isEmpty {
+                        Text(usage.isRefreshing ? "Checking usage…" : "No connected usage meters")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let manageUsage {
+                        Button("Manage usage…", action: manageUsage)
+                            .font(.caption)
+                    }
+                }
             }
         }
     }
@@ -449,6 +494,7 @@ private struct ProviderUsageCard: View {
     let now: Date
     var retry: (() -> Void)? = nil
     var isRetrying = false
+    var showDiagnostics = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -467,12 +513,12 @@ private struct ProviderUsageCard: View {
                     ProgressView()
                         .controlSize(.mini)
                         .frame(width: 20, height: 20)
-                        .accessibilityLabel("Waiting for Claude Keychain access")
+                        .accessibilityLabel("Waiting for \(provider.displayName) Keychain access")
                 } else if let retry {
-                    PanelIconButton(symbol: "arrow.clockwise",
-                        help: "Reconnect Claude — may request Keychain access", action: retry)
-                        .accessibilityLabel("Reconnect Claude")
-                        .accessibilityIdentifier("claude-keychain-retry")
+                    Button("Reconnect \(provider.displayName)", action: retry)
+                        .controlSize(.small)
+                        .help("May request Keychain access")
+                        .accessibilityIdentifier("\(provider.rawValue)-keychain-retry")
                 }
             }
 
@@ -485,7 +531,7 @@ private struct ProviderUsageCard: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                if let error = usage.errorMessage, !error.isEmpty {
+                if showDiagnostics, let error = usage.errorMessage, !error.isEmpty {
                     // Errors may carry inline markdown (e.g. "run `claude` in a terminal and /login");
                     // parse inline-only so backticks render as code, falling back to the raw text.
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -498,7 +544,7 @@ private struct ProviderUsageCard: View {
                     }
                     .font(.caption)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                } else if usage.windows.isEmpty {
+                } else if showDiagnostics, usage.windows.isEmpty {
                     Text("No limits reported")
                         .font(.caption)
                         .foregroundStyle(.secondary)

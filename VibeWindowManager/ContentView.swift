@@ -8,7 +8,10 @@
 import AppKit
 import SwiftUI
 
-private enum MainTab: String, CaseIterable, Hashable, Identifiable {
+enum MainTab: String, CaseIterable, Hashable, Identifiable {
+    static let selectionKey = "mainWindow.selectedTab"
+
+    case usage
     case layout
     case bridge
     case phoneSSH
@@ -21,6 +24,7 @@ private enum MainTab: String, CaseIterable, Hashable, Identifiable {
 
     var title: String {
         switch self {
+        case .usage: "Usage"
         case .layout: "Window layouts"
         case .phoneSSH: "Phone & SSH"
         case .bridge: "iOS bridge"
@@ -33,6 +37,7 @@ private enum MainTab: String, CaseIterable, Hashable, Identifiable {
 
     var symbol: String {
         switch self {
+        case .usage: "chart.bar"
         case .layout: "rectangle.split.2x2"
         case .phoneSSH: "terminal"
         case .bridge: "iphone.and.arrow.forward"
@@ -79,7 +84,7 @@ struct ContentView: View {
     @AppStorage("vibeWhisperModelPath") private var whisperModelPath: String = ""
     @AppStorage("vibeWhisperLanguage") private var whisperLanguage: String = "en"
     @AppStorage("vibeWhisperOpenAIPip") private var useOpenAIWhisperPip: Bool = true
-    @State private var mainTab: MainTab = .layout
+    @AppStorage(MainTab.selectionKey) private var mainTab: MainTab = .layout
     @State private var networkSectionExpanded: Bool = true
     @State private var sttSectionExpanded: Bool = false
     @State private var displayConfigurationRevision: Int = 0
@@ -92,6 +97,7 @@ struct ContentView: View {
                     set: { if let tab = $0 { mainTab = tab } }
                 )) {
                     Section("Workspace") {
+                        navigationRow(.usage)
                         navigationRow(.layout)
                         navigationRow(.media)
                         navigationRow(.servers)
@@ -120,6 +126,7 @@ struct ContentView: View {
         } detail: {
             Group {
                 switch mainTab {
+                case .usage: UsageSettingsView()
                 case .layout: layoutTab
                 case .phoneSSH: PhoneSSHView()
                 case .bridge: bridgeTab

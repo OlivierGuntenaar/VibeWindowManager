@@ -79,4 +79,39 @@ struct UsagePresentationTests {
         let formatted = UsageFormat.errorText("Cursor is offline (HTTP 503).")
         #expect(String(formatted.characters) == "Cursor is offline (HTTP 503).")
     }
+    @Test func menuOnlyIncludesProvidersWithUsableMeters() async {
+        struct Fetcher: UsageFetching {
+            let result: ProviderUsage
+            func fetch() async -> ProviderUsage { result }
+        }
+        let service = UsageLimitsService(fetchers: [
+            .claude: Fetcher(result: ProviderUsage(provider: .claude, planName: nil, windows: [],
+                fetchedAt: now, errorMessage: "No credentials found")),
+            .codex: Fetcher(result: ProviderUsage(provider: .codex, planName: "Pro",
+                windows: [UsageWindow(label: "Weekly", usedPercent: 0, resetsAt: nil)],
+                fetchedAt: now, errorMessage: nil)),
+            .cursor: Fetcher(result: ProviderUsage(provider: .cursor, planName: nil,
+                windows: [UsageWindow(label: "API", usedPercent: 12, resetsAt: nil)],
+                fetchedAt: now, errorMessage: "Plan info unavailable")),
+            .grokBot: Fetcher(result: ProviderUsage(provider: .grokBot, planName: nil, windows: [],
+                fetchedAt: now, errorMessage: "Connect usage")),
+        ])
+        #expect(service.menuProviders.isEmpty)
+        service.refresh()
+        for _ in 0..<200 where service.isRefreshing { try? await Task.sleep(for: .milliseconds(5)) }
+        #expect(!service.isRefreshing)
+        #expect(service.menuProviders == [.codex, .cursor])
+        // The main window can still show setup failures and partial-result diagnostics.
+        #expect(service.usage(for: .claude)?.errorMessage == "No credentials found")
+        #expect(service.usage(for: .grokBot)?.errorMessage == "Connect usage")
+        #expect(service.usage(for: .cursor)?.errorMessage == "Plan info unavailable")
+    }
+
+    @Test func malformedMeterDoesNotMakeAProviderVisible() {
+        let usage = ProviderUsage(provider: .cursor, planName: nil,
+            windows: [UsageWindow(label: "API", usedPercent: .nan, resetsAt: nil)],
+            fetchedAt: now, errorMessage: nil)
+        #expect(!usage.hasUsableMeter)
+    }
+
 }

@@ -92,3 +92,17 @@ Reduce Motion is enabled. macOS protects direct preference writes, so the app ru
 Apple’s built-in action through the bundled, signed **Vibe Toggle Reduce Motion**
 shortcut. On a new Mac, use **Set Up…** once and add that shortcut in Shortcuts.
 Subsequent clicks run it in the background. Launching Vibe never changes the setting.
+
+## Usage meters
+
+The menu-bar panel shows providers with a usable usage meter. Choose **Manage usage…**
+or **Show Window → Usage** for all provider connection messages, setup, and refresh controls.
+Usage comes from signed-in accounts; an app does not need to stay open for its meter to appear.
+
+Cursor's encrypted desktop login alone is not readable by Window Manager. Sign in to
+**Cursor Agent (the CLI)** with the same account, then use **Reconnect Cursor** on the Usage page.
+Only this explicit action may request Keychain access; automatic refresh stays silent.
+Window Manager does not decrypt or rewrite Cursor's login store.
+
+Grok Bot can supply its own fresh, account-scoped usage snapshot (cache schemas 2 and 3).
+Open Grok Bot's usage panel to create or update that snapshot. Expired snapshots are ignored.
