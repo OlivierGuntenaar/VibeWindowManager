@@ -240,9 +240,7 @@ struct MenuBarPanelView: View {
         VStack(spacing: 0) {
             UsageSection(usage: usage, showDiagnostics: false) {
                 UserDefaults.standard.set(MainTab.usage.rawValue, forKey: MainTab.selectionKey)
-                closePanel()
-                openWindow(id: mainWindowID)
-                NSApp.activate(ignoringOtherApps: true)
+                showMainWindow()
             }
                 .padding(PanelMetrics.padding)
 
@@ -298,14 +296,20 @@ struct MenuBarPanelView: View {
         }
     }
 
+    /// Raises the existing main window (restoring it when minimized) instead of opening another.
+    private func showMainWindow() {
+        closePanel()
+        ShowMainWindow.show {
+            openWindow(id: mainWindowID)
+        }
+    }
+
     // MARK: Actions
 
     private var actionsSection: some View {
         VStack(spacing: 0) {
             PanelActionRow(title: "Show Window", symbol: "macwindow") {
-                closePanel()
-                openWindow(id: mainWindowID)
-                NSApp.activate(ignoringOtherApps: true)
+                showMainWindow()
             }
 
             PanelToggleRow(
