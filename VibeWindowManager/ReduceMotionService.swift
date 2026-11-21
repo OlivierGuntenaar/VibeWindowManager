@@ -154,15 +154,32 @@ struct ReduceMotionControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: motion.binding) {
-                Label("Reduce Motion", systemImage: "figure.walk")
+            // Same layout as the panel's other switch rows: fixed icon column, label, and the
+            // switch pinned to the trailing edge rather than hugging the label.
+            HStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "figure.walk")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+                    Text("Reduce Motion")
+                        .font(.callout)
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard !motion.isUpdating else { return }
+                    motion.binding.wrappedValue.toggle()
+                }
+
+                Toggle("Reduce Motion", isOn: motion.binding)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .disabled(motion.isUpdating)
+                    .accessibilityIdentifier("reduce-motion-toggle")
             }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
-            .font(.callout)
-            .disabled(motion.isUpdating)
             .help("Reduce motion throughout macOS")
-            .accessibilityIdentifier("reduce-motion-toggle")
             if let error = motion.errorMessage {
                 Text(error).font(.caption).foregroundStyle(.secondary)
                 Button(motion.needsSetup ? "Set Up…" : "Open Motion Settings…") {
