@@ -60,16 +60,15 @@ test build. See [shipping and updates](docs/SHIPPING.md) for installation, relea
 publishing, and protecting the update signing key.
 
 The menu-bar usage panel includes Claude, Codex, Cursor, and Grok Bot. Claude shows the
-Pro/Max subscription allowance using the saved Claude Code login. It renews expired
-access directly with Anthropic and securely saves rotated credentials, without
-opening Claude Code or making model requests. Usage refreshes are shared and cached
-for at least five minutes. Rate limits honor `Retry-After` and use increasing
-cooldowns that survive relaunches. A revoked login requires a one-time sign-in;
-ordinary access-token expiry renews automatically. Keychain reads and writes use
-Apple's `security` tool consistently to preserve its trusted signing identity.
-Background checks pause when the Keychain is locked or access is denied; use
-the reload icon beside **Claude** to authorize it explicitly. Credentials that exceed the
-system tool's input limit are rejected without modifying the existing item.
+Pro/Max subscription allowance using the **Claude desktop app's** own sign-in: no Claude
+Code CLI login and no terminal. Vibe decrypts the desktop app's token cache with its
+"Claude Safe Storage" Keychain key, read through Apple's `security` tool. The first time,
+choose **Reconnect Claude** on the Usage page and click **Always Allow**; later refreshes
+are silent, including after Vibe updates. Access is read-only: Vibe never renews, revokes
+or rewrites the token (the desktop app renews its own sign-in, which lasts weeks), and it
+only uses the narrowest-scoped `api.anthropic.com` token for the app's current account.
+Usage refreshes are shared and cached for at least five minutes. Rate limits honor
+`Retry-After` and use increasing cooldowns that survive relaunches.
 
 Cursor reads its local login from its SQLite settings database (read-only). Newer
 Cursor versions encrypt that token; Vibe instead uses an existing Cursor Agent CLI

@@ -139,12 +139,13 @@ final class UsageLimitsService: ObservableObject {
         }
     }
 
-    /// Only an explicit user action may open macOS's Keychain authorization dialog.
+    /// Only an explicit user action may open macOS's Keychain dialog for the Claude app's
+    /// storage key ("Always Allow" makes every later refresh silent).
     func authorizeClaudeKeychain() {
         guard !isAuthorizingClaude else { return }
         isAuthorizingClaude = true
         Task {
-            let result = await ClaudeKeychain.read(allowInteraction: true)
+            let result = await SafeStoragePassword.shared.read(allowInteraction: true)
             isAuthorizingClaude = false
             if case .found = result {
                 ClaudeRefreshCoordinator.shared.keychainAccessWasGranted()

@@ -38,7 +38,7 @@ updates. Do not use this test script for a notarized release.
 2. Open the app from Applications. If macOS blocks this unnotarized build, use
    System Settings → Privacy & Security → Open Anyway after attempting launch.
 3. Grant Accessibility for window control and Screen Recording for previews.
-4. Sign in to Cursor, Claude Code, and Codex locally to populate their usage cards.
+4. Sign in to the Claude desktop app, Cursor, and Codex locally to populate their usage cards.
 
 Xcode is not required on the recipient's Mac. No developer credentials or local
 usage credentials are bundled. With ad-hoc signing, macOS may require granting

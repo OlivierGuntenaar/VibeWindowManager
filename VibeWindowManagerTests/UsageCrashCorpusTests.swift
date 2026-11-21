@@ -53,21 +53,32 @@ struct UsageCrashCorpusTests {
         for value in values {
             #expect(ClaudeUsageFetcher.parseWindows(["five_hour": value]).isEmpty)
             #expect(CodexUsageEngine.parseLive(["rateLimits": value])?.windows.isEmpty != false)
-            let credential: [String: Any] = ["claudeAiOauth": ["accessToken": value]]
+            let key = "acct:a|c:o:https://api.anthropic.com:user:profile"
             if !(value is String) || (value as? String)?.isEmpty == true {
-                let data = try? JSONSerialization.data(withJSONObject: credential)
-                if let data { #expect(ClaudeUsageFetcher.parseCredential(data) == nil) }
+                #expect(ClaudeDesktopSession.usableTokens(in: [key: ["token": value]], account: nil).isEmpty)
             }
+            #expect(ClaudeDesktopSession.usableTokens(in: [key: value], account: nil).isEmpty)
         }
     }
 
-    @Test func truncatedCredentialDocumentsNeverYieldPartialCredentials() {
-        let valid = Data(#"{"claudeAiOauth":{"accessToken":"test-only-token","expiresAt":2000000000000}}"#.utf8)
-        for length in 0..<valid.count {
-            #expect(ClaudeUsageFetcher.parseCredential(valid.prefix(length)) == nil)
+    @Test func malformedEncryptedBlobsNeverDecrypt() {
+        let password = Data("fixture-password".utf8)
+        var state: UInt64 = 0x5AFE5AFE
+        var blobs = ["", "v10", "djEw", "not base64!", Data("v11".utf8).base64EncodedString(),
+                     (Data("v10".utf8) + Data(repeating: 0, count: 15)).base64EncodedString()]
+        for length in stride(from: 16, through: 256, by: 16) {
+            let noise = (0..<length).map { _ -> UInt8 in
+                state = state &* 6364136223846793005 &+ 1442695040888963407
+                return UInt8(truncatingIfNeeded: state >> 33)
+            }
+            blobs.append((Data("v10".utf8) + Data(noise)).base64EncodedString())
         }
-        for bytes: [UInt8] in [[0xff], [0xc0, 0xaf], [0x7b, 0xff, 0x7d], [0, 0, 0]] {
-            #expect(ClaudeUsageFetcher.parseCredential(Data(bytes)) == nil)
+        for blob in blobs {
+            if let plain = ClaudeDesktopSession.decrypt(blob, password: password) {
+                // Random ciphertext can occasionally carry valid padding; it must never parse as a cache.
+                #expect((try? JSONSerialization.jsonObject(with: plain)) as? [String: Any] == nil)
+            }
         }
+        #expect(ClaudeDesktopSession.decrypt(blobs.last!, password: Data()) == nil)
     }
 }

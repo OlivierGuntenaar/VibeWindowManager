@@ -80,7 +80,7 @@ def main():
         "This build is not notarized. If macOS blocks it, open System Settings >\n"
         "Privacy & Security > Open Anyway after trying to launch the app.\n"
         "Grant Accessibility for window control; Screen Recording for previews.\n"
-        "Sign into Cursor, Claude Code, and Codex on YOUR Mac for usage limits.\n"
+        "Sign into the Claude app, Cursor, and Codex on YOUR Mac for usage limits.\n"
         "Updates are checked automatically; you choose when to install them.\n"
         "Use Check for Updates in the app menu or menu-bar panel.\n")
     dmg = output / f"VibeWindowManager-{args.version}-{args.build}.dmg"

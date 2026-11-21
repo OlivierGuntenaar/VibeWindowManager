@@ -2,28 +2,21 @@
 //  ClaudeUsageFetcher.swift
 //  VibeWindowManager
 //
-//  Fetches the Claude subscription usage that Claude Code's `/usage` shows
-//  (5-hour session, weekly, per-model weekly windows, extra usage).
+//  Fetches Claude subscription usage (5-hour session, weekly, per-model weekly
+//  windows, extra usage), the same numbers the Claude app's usage page shows.
 //
-//  Data source (verified against Claude Code 2.1.289's bundled source):
 //    GET https://api.anthropic.com/api/oauth/usage
-//    Authorization: Bearer <claudeAiOauth.accessToken>
+//    Authorization: Bearer <token>
 //    anthropic-beta: oauth-2025-04-20
 //  Response:
-//    { five_hour | seven_day | seven_day_opus | seven_day_sonnet | seven_day_oauth_apps:
+//    { five_hour | seven_day | seven_day_opus | seven_day_sonnet:
 //          { utilization: Double? /* percent 0...100 */, resets_at: ISO-8601 String? },
-//      extra_usage: { is_enabled, monthly_limit, used_credits, utilization, currency },
-//      limits: [{ kind, group, percent, resets_at, severity, is_active,
-//                 scope: { model: { display_name }, surface: { display_name } } }] }
+//      extra_usage: { is_enabled, utilization, ... },
+//      limits: [{ kind, group, percent, resets_at, scope: { model: { display_name } } }] }
 //
-//  Credentials: Claude Code's login Keychain item, with a ~/.claude/.credentials.json fallback.
-//  ClaudeKeychain checks access before background reads and uses the same Apple-signed
-//  tool for reads and writes. Authorization happens only through the user's access button.
-//
-//  ClaudeOAuthSession renews expired tokens directly, under Claude Code's shared
-//  refresh locks, and saves rotated credentials back to their original store.
-//  Both usage requests and renewal failures have bounded, persistent cooldowns.
-//  Token values are never logged.
+//  The token comes from the Claude desktop app's own sign-in (ClaudeDesktopSession),
+//  read-only: nothing here signs in, renews or writes credentials. The refresh coordinator
+//  applies bounded, persistent cooldowns to errors and 429s. Token values are never logged.
 //
 
 import Foundation
@@ -186,98 +179,52 @@ extension ClaudeUsageFetcher {
         var requiresKeychainAccess = false
     }
 
-    nonisolated struct OAuthCredential: Sendable {
-        let accessToken: String
-        let expiresAt: Date?
-        let subscriptionType: String?
-        let rateLimitTier: String?
-
-        var isExpired: Bool {
-            isExpired(at: Date())
-        }
-
-        func isExpired(at now: Date) -> Bool {
-            guard let expiresAt else { return false }
-            return expiresAt.timeIntervalSince(now) < 30
-        }
-    }
-
-    nonisolated enum CredentialLookup: Sendable {
-        case found(OAuthCredential)
-        case expired(OAuthCredential)
-        case missing(String)
-        case inaccessible(String)
-    }
-
     nonisolated static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
-    nonisolated static let keychainService = "Claude Code-credentials"
 
     @concurrent
     nonisolated static func loadSnapshot(
-        credentialLookup: @escaping @Sendable () async -> CredentialLookup = { await lookUpCredential() },
+        session: @escaping @Sendable () async -> ClaudeDesktopSession.Lookup = { await ClaudeDesktopSession.lookup() },
         transport: @escaping @Sendable (URLRequest) async throws -> (Data, URLResponse) = { try await URLSession.shared.data(for: $0) },
-        configPlan: @escaping @Sendable () -> String? = { planNameFromClaudeConfig() },
-        now: @escaping @Sendable () -> Date = Date.init,
-        renewCredential: @escaping @Sendable (OAuthCredential) async -> ClaudeOAuthSession.Result = { await ClaudeOAuthSession.shared.renew(replacing: $0) },
-        rejectRenewedCredential: @escaping @Sendable (OAuthCredential) async -> Void = { await ClaudeOAuthSession.shared.rejectRenewedCredential($0) }
+        now: @escaping @Sendable () -> Date = Date.init
     ) async -> Snapshot {
         var snapshot = Snapshot()
         guard !Task.isCancelled else { snapshot.isCancelled = true; return snapshot }
 
-        var credential: OAuthCredential
-        var renewed = false
-        switch await credentialLookup() {
-        case .found(let c):
-            credential = c
-        case .expired(let c):
-            snapshot.planName = planName(subscriptionType: c.subscriptionType, rateLimitTier: c.rateLimitTier)
-                ?? configPlan()
-            switch await renewCredential(c) {
-            case .ready(let fresh): credential = fresh; renewed = true
-            case .failed(var failure): failure.planName = snapshot.planName; return failure
-            }
-        case .inaccessible(let reason):
-            snapshot.planName = configPlan()
+        let token: ClaudeDesktopSession.Token
+        switch await session() {
+        case .found(let found):
+            token = found
+        case .expired(let lapsed):
+            snapshot.planName = planName(subscriptionType: lapsed.subscriptionType, rateLimitTier: lapsed.rateLimitTier)
+            snapshot.errorMessage = "The Claude app's sign-in has lapsed. Open Claude once to renew it."
+            return snapshot
+        case .notSignedIn(let reason):
+            snapshot.errorMessage = reason
+            return snapshot
+        case .needsKeychainAccess(let reason):
             snapshot.errorMessage = reason
             snapshot.requiresKeychainAccess = true
             snapshot.isTransient = true
             return snapshot
-        case .missing(let reason):
-            snapshot.planName = configPlan()
+        case .unreadable(let reason):
             snapshot.errorMessage = reason
+            snapshot.isTransient = true
             return snapshot
         }
-
-        snapshot.planName = planName(subscriptionType: credential.subscriptionType, rateLimitTier: credential.rateLimitTier)
-            ?? configPlan()
+        snapshot.planName = planName(subscriptionType: token.subscriptionType, rateLimitTier: token.rateLimitTier)
 
         guard !Task.isCancelled else { snapshot.isCancelled = true; return snapshot }
         var request = URLRequest(url: usageURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(credential.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(token.accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("VibeWindowManager", forHTTPHeaderField: "User-Agent")
 
-        var data: Data
-        var response: URLResponse
+        let data: Data
+        let response: URLResponse
         do {
             (data, response) = try await transport(request)
-            if (response as? HTTPURLResponse)?.statusCode == 401, !renewed, !Task.isCancelled {
-                switch await renewCredential(credential) {
-                case .ready(let fresh):
-                    credential = fresh
-                    renewed = true
-                    snapshot.planName = planName(subscriptionType: fresh.subscriptionType, rateLimitTier: fresh.rateLimitTier) ?? configPlan()
-                    request.setValue("Bearer \(fresh.accessToken)", forHTTPHeaderField: "Authorization")
-                    guard !Task.isCancelled else { snapshot.isCancelled = true; return snapshot }
-                    (data, response) = try await transport(request)
-                case .failed(var failure):
-                    failure.planName = snapshot.planName
-                    return failure
-                }
-            }
         } catch {
             snapshot.isCancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
             snapshot.isTransient = true
@@ -289,18 +236,18 @@ extension ClaudeUsageFetcher {
             snapshot.isCancelled = true
             return snapshot
         }
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let http = response as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
         snapshot.httpStatus = status
-        snapshot.retryAfter = retryDate((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After"), now: now())
+        snapshot.retryAfter = retryDate(http?.value(forHTTPHeaderField: "Retry-After"), now: now())
         switch status {
         case 200:
             break
         case 401:
-            if renewed { await rejectRenewedCredential(credential) }
-            snapshot.errorMessage = "Claude rejected the renewed sign-in. Sign in once in Claude Code to reconnect."
+            snapshot.errorMessage = "Anthropic refused the Claude app's sign-in. Open Claude once to renew it."
             return snapshot
         case 403:
-            snapshot.errorMessage = "Usage not available for this login (403) — sign in to Claude Code with a Pro/Max account."
+            snapshot.errorMessage = "Usage isn't available for this Claude account (403). It needs a Pro or Max plan."
             return snapshot
         case 429:
             snapshot.isTransient = true
@@ -444,92 +391,5 @@ extension ClaudeUsageFetcher {
         return base
     }
 
-    /// Non-secret fallback: ~/.claude.json carries `oauthAccount.organizationType`
-    /// (e.g. "claude_max") and `organizationRateLimitTier` (e.g. "default_claude_max_20x").
-    nonisolated static func planNameFromClaudeConfig() -> String? {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
-        guard let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let account = json["oauthAccount"] as? [String: Any] else { return nil }
-        return planName(
-            subscriptionType: account["organizationType"] as? String,
-            rateLimitTier: (account["userRateLimitTier"] as? String) ?? (account["organizationRateLimitTier"] as? String)
-        )
-    }
 
-    // MARK: Credentials
-
-    nonisolated static func lookUpCredential(
-        keychainRead: @escaping @Sendable () async -> ClaudeKeychain.ReadResult = { await ClaudeKeychain.read() },
-        fileRead: @escaping @Sendable () -> Data? = {
-            try? Data(contentsOf: FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/.credentials.json"))
-        }
-    ) async -> CredentialLookup {
-        let keychain = await keychainRead()
-        let keychainBlob: Data?
-        if case .found(_, let data) = keychain { keychainBlob = data } else { keychainBlob = nil }
-        var expired: OAuthCredential?
-        var sawStore = false
-        for blob in [keychainBlob, fileRead()].compactMap({ $0 }) {
-            sawStore = true
-            guard let credential = parseCredential(blob) else { continue }
-            if credential.isExpired { expired = expired ?? credential }
-            else { return .found(credential) }
-        }
-        if let expired { return .expired(expired) }
-        switch keychain {
-        case .locked: return .inaccessible("Keychain is locked. Unlock it to read Claude usage.")
-        case .approvalRequired: return .inaccessible("Allow Keychain access to read Claude usage.")
-        case .unavailable: return .inaccessible("Claude credentials are temporarily inaccessible.")
-        case .found, .missing: break
-        }
-        return .missing(sawStore ? "No Claude login saved. Sign in once in Claude Code."
-            : "No Claude credentials found. Sign in once in Claude Code.")
-    }
-
-    nonisolated static func credentialJSON(_ data: Data) -> [String: Any]? {
-        var data = data
-        // Tolerate a hex-encoded value (some writers store `security -X <hex>`).
-        if data.first != UInt8(ascii: "{"),
-           let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           let decoded = Data(hexString: text) {
-            data = decoded
-        }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-
-    nonisolated static func parseCredential(_ data: Data) -> OAuthCredential? {
-        guard let json = credentialJSON(data),
-              let oauth = json["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String,
-              !token.isEmpty else { return nil }
-        var expiresAt: Date?
-        if let ms = number(oauth["expiresAt"]), ms > 0 {
-            expiresAt = Date(timeIntervalSince1970: ms > 1e12 ? ms / 1000 : ms)
-        }
-        return OAuthCredential(
-            accessToken: token,
-            expiresAt: expiresAt,
-            subscriptionType: oauth["subscriptionType"] as? String,
-            rateLimitTier: oauth["rateLimitTier"] as? String
-        )
-    }
-
-
-}
-
-private extension Data {
-    nonisolated init?(hexString: String) {
-        guard hexString.count.isMultiple(of: 2), !hexString.isEmpty else { return nil }
-        var bytes = [UInt8]()
-        bytes.reserveCapacity(hexString.count / 2)
-        var index = hexString.startIndex
-        while index < hexString.endIndex {
-            let next = hexString.index(index, offsetBy: 2)
-            guard let byte = UInt8(hexString[index..<next], radix: 16) else { return nil }
-            bytes.append(byte)
-            index = next
-        }
-        self.init(bytes)
-    }
 }

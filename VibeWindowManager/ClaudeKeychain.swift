@@ -1,15 +1,17 @@
 import Foundation
 import Security
 
-/// Claude Code uses Apple's security tool. Use that same identity for reads AND writes:
-/// a native SecItemUpdate rewrites the partition list to this app's ad-hoc signing hash.
+/// Read-only access to other apps' login-Keychain items (the Claude desktop app's storage key,
+/// Cursor's CLI token) through Apple's `security` tool. Its "Always Allow" grant survives
+/// updates of this ad-hoc-signed app. `access` checks trust without ever prompting; only an
+/// explicit user action passes `allowInteraction`. Nothing here writes to the Keychain.
 nonisolated enum ClaudeKeychain {
     enum Access: Equatable, Sendable { case ready(String), missing, locked, approvalRequired, unavailable }
     enum ReadResult: Sendable { case found(String, Data), missing, locked, approvalRequired, unavailable }
     static let blockedKey = "claudeUsage.keychainAccessBlocked"
     private static let metadataLock = NSLock()
 
-    static func access(service: String = ClaudeUsageFetcher.keychainService) -> Access {
+    static func access(service: String) -> Access {
         metadataLock.withLock {
             var wasAllowed: DarwinBoolean = true
             guard SecKeychainGetUserInteractionAllowed(&wasAllowed) == errSecSuccess,
@@ -85,7 +87,7 @@ nonisolated enum ClaudeKeychain {
     }
 
     @concurrent static func read(allowInteraction: Bool = false, defaults: UserDefaults = .standard,
-                                 service: String = ClaudeUsageFetcher.keychainService) async -> ReadResult {
+                                 service: String) async -> ReadResult {
         let state = access(service: service)
         if state == .missing { return .missing }
         if !allowInteraction {
@@ -109,25 +111,6 @@ nonisolated enum ClaudeKeychain {
         else if case .ready(let name) = access(service: service) { resolvedAccount = name }
         else { defaults.set(true, forKey: blockedKey); return .approvalRequired }
         return .found(resolvedAccount, data)
-    }
-
-    /// security's interactive parser has a 4096-byte buffer. Fail before starting a process if
-    /// the ENTIRE encoded command won't fit; never truncate credentials or put secrets in argv.
-    static func updateCommand(account: String, service: String, data: Data) -> Data? {
-        guard let json = String(data: data, encoding: .utf8), !json.contains("\n"), !json.contains("\r"), !json.contains("\0") else { return nil }
-        func quote(_ value: String) -> String {
-            "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
-        }
-        guard !account.contains(where: { $0.isNewline || $0 == "\0" }), !service.contains(where: { $0.isNewline || $0 == "\0" }) else { return nil }
-        let command = Data("add-generic-password -U -a \(quote(account)) -s \(quote(service)) -w \(quote(json))\n".utf8)
-        return command.count < 4096 ? command : nil
-    }
-
-    @concurrent static func update(account: String, service: String, data: Data) async -> Bool {
-        guard let command = updateCommand(account: account, service: service, data: data),
-              case .ready(let current) = access(service: service), current == account else { return false }
-        let result = await run(["-i"], input: command, timeout: 10)
-        return result.status == 0
     }
 
     struct ProcessResult: Sendable { let status: Int32; let data: Data? }

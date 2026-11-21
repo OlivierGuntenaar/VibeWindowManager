@@ -281,13 +281,14 @@ struct ClaudeRefreshPolicyTests {
     @Test func actual429ResponseCapturesRetryHeaderWithoutLiveCredentialsOrNetwork() async {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let snapshot = await ClaudeUsageFetcher.loadSnapshot(
-            credentialLookup: { .found(.init(accessToken: "fixture-token", expiresAt: nil, subscriptionType: "pro", rateLimitTier: nil)) },
+            session: { .found(.init(accessToken: "fixture-token", expiresAt: nil, scopes: ["user:profile"],
+                                    subscriptionType: "pro", rateLimitTier: nil)) },
             transport: { request in
                 #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture-token")
                 #expect(request.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
                 return (Data(), HTTPURLResponse(url: request.url!, statusCode: 429, httpVersion: nil,
                                               headerFields: ["Retry-After": "7200"])!)
-            }, configPlan: { nil }, now: { now })
+            }, now: { now })
         #expect(snapshot.httpStatus == 429)
         #expect(snapshot.retryAfter == now.addingTimeInterval(7200))
         #expect(snapshot.isTransient)
@@ -295,15 +296,15 @@ struct ClaudeRefreshPolicyTests {
     }
 
     @Test func networkFailureIsTransientAndCancellationIsRecognized() async {
-        let lookup: @Sendable () async -> ClaudeUsageFetcher.CredentialLookup = {
-            .found(.init(accessToken: "fixture", expiresAt: nil, subscriptionType: nil, rateLimitTier: nil))
+        let lookup: @Sendable () async -> ClaudeDesktopSession.Lookup = {
+            .found(.init(accessToken: "fixture", expiresAt: nil, scopes: ["user:profile"], subscriptionType: nil, rateLimitTier: nil))
         }
-        let offline = await ClaudeUsageFetcher.loadSnapshot(credentialLookup: lookup,
-            transport: { _ in throw URLError(.notConnectedToInternet) }, configPlan: { nil })
+        let offline = await ClaudeUsageFetcher.loadSnapshot(session: lookup,
+            transport: { _ in throw URLError(.notConnectedToInternet) })
         #expect(offline.isTransient)
         #expect(!offline.isCancelled)
-        let cancelled = await ClaudeUsageFetcher.loadSnapshot(credentialLookup: lookup,
-            transport: { _ in throw URLError(.cancelled) }, configPlan: { nil })
+        let cancelled = await ClaudeUsageFetcher.loadSnapshot(session: lookup,
+            transport: { _ in throw URLError(.cancelled) })
         #expect(cancelled.isCancelled)
     }
 }
